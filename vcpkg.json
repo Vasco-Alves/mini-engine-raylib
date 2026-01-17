@@ -1,0 +1,7 @@
+{
+    "name": "mini-engine",
+    "dependencies": [
+        "raylib",
+        "nlohmann-json"
+    ]
+}
