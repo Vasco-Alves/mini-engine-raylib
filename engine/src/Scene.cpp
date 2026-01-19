@@ -14,13 +14,12 @@
 #include <string>
 #include <vector>
 
-
 using json = nlohmann::ordered_json;
 namespace fs = std::filesystem;
 
 namespace me::scene {
 
-	// ---------- helpers ----------
+	// ---------- Helpers (Serialization Logic) ----------
 
 	// Transform2D
 	static json ToJson(const me::components::Transform2D& t) {
@@ -48,7 +47,7 @@ namespace me::scene {
 			{"flipX",   s.flipX},   {"flipY",   s.flipY},
 			{"tint", { s.tint.r, s.tint.g, s.tint.b, s.tint.a }}
 		};
-		if (uri && *uri) j["tex"] = uri; // store URI if available
+		if (uri && *uri) j["tex"] = uri;
 		return j;
 	}
 
@@ -73,32 +72,48 @@ namespace me::scene {
 	// Camera2D
 	static json ToJson(const me::components::Camera2D& c) {
 		return json{
-			{"x", c.x}, {"y", c.y},
 			{"zoom", c.zoom},
-			{"rotation", c.rotation},
 			{"active", c.active}
 		};
 	}
 
 	static void FromJson(const json& j, me::components::Camera2D& c) {
-		c.x = j.value("x", 0.0f);
-		c.y = j.value("y", 0.0f);
 		c.zoom = j.value("zoom", 1.0f);
-		c.rotation = j.value("rotation", 0.0f);
 		c.active = j.value("active", false);
+	}
+
+	// CameraFollow
+	static json ToJson(const me::components::CameraFollow& c) {
+		return json{
+			{"target", c.target},
+			{"stiffness", c.stiffness},
+			{"deadzone", c.deadzone},
+			{"offsetX", c.offsetX},
+			{"offsetY", c.offsetY}
+		};
+	}
+
+	static void FromJson(const json& j, me::components::CameraFollow& c) {
+		c.target = j.value("target", 0u);
+		c.stiffness = j.value("stiffness", 5.0f);
+		c.deadzone = j.value("deadzone", 0.0f);
+		c.offsetX = j.value("offsetX", 0.0f);
+		c.offsetY = j.value("offsetY", 0.0f);
 	}
 
 	// Velocity2D
 	static json ToJson(const me::components::Velocity2D& v) {
 		return json{
 			{"vx", v.vx},
-			{"vy", v.vy}
+			{"vy", v.vy},
+			{"mass", v.mass}
 		};
 	}
 
 	static void FromJson(const json& j, me::components::Velocity2D& v) {
 		v.vx = j.value("vx", 0.0f);
 		v.vy = j.value("vy", 0.0f);
+		v.mass = j.value("mass", 1.0f);
 	}
 
 	// AabbCollider
@@ -113,6 +128,22 @@ namespace me::scene {
 	static void FromJson(const json& j, me::components::AabbCollider& c) {
 		c.w = j.value("w", 32.0f);
 		c.h = j.value("h", 32.0f);
+		c.ox = j.value("ox", 0.0f);
+		c.oy = j.value("oy", 0.0f);
+		c.solid = j.value("solid", true);
+	}
+
+	// CircleCollider
+	static json ToJson(const me::components::CircleCollider& c) {
+		return json{
+			{"radius", c.radius},
+			{"ox", c.ox}, {"oy", c.oy},
+			{"solid", c.solid}
+		};
+	}
+
+	static void FromJson(const json& j, me::components::CircleCollider& c) {
+		c.radius = j.value("radius", 16.0f);
 		c.ox = j.value("ox", 0.0f);
 		c.oy = j.value("oy", 0.0f);
 		c.solid = j.value("solid", true);
@@ -174,52 +205,70 @@ namespace me::scene {
 		json root;
 		root["entities"] = json::array();
 
-		// Iterate entities via registry
-		me::detail::Reg().ForEachEntity([&](me::EntityId e) {
+		auto& reg = me::detail::Reg();
+
+		// Iterate all entities via the main registry map
+		// (We access components via generic pools now)
+		for (const auto& kv : reg.entities) {
+			me::EntityId e = kv.first;
+
+			// Skip dead entities if any remain
+			if (!kv.second.alive) continue;
+
 			json je;
 			je["id"] = static_cast<uint32_t>(e);
 			je["name"] = me::GetName(e);
 
 			json comps = json::object();
 
-			me::components::Transform2D t{};
-			if (me::GetComponent(e, t)) {
-				comps["Transform2D"] = ToJson(t);
+			// -- Transform2D --
+			if (auto* c = reg.TryGetComponent<me::components::Transform2D>(e)) {
+				comps["Transform2D"] = ToJson(*c);
 			}
 
-			me::components::SpriteRenderer sr{};
-			if (me::GetComponent(e, sr)) {
-				comps["SpriteRenderer"] = ToJson(sr);
+			// -- SpriteRenderer --
+			if (auto* c = reg.TryGetComponent<me::components::SpriteRenderer>(e)) {
+				comps["SpriteRenderer"] = ToJson(*c);
 			}
 
-			me::components::Camera2D cam{};
-			if (me::GetComponent(e, cam)) {
-				comps["Camera2D"] = ToJson(cam);
+			// -- Camera2D --
+			if (auto* c = reg.TryGetComponent<me::components::Camera2D>(e)) {
+				comps["Camera2D"] = ToJson(*c);
 			}
 
-			me::components::Velocity2D v{};
-			if (me::GetComponent(e, v)) {
-				comps["Velocity2D"] = ToJson(v);
+			// -- CameraFollow --
+			if (auto* c = reg.TryGetComponent<me::components::CameraFollow>(e)) {
+				comps["CameraFollow"] = ToJson(*c);
 			}
 
-			me::components::AabbCollider col{};
-			if (me::GetComponent(e, col)) {
-				comps["AabbCollider"] = ToJson(col);
+			// -- Velocity2D --
+			if (auto* c = reg.TryGetComponent<me::components::Velocity2D>(e)) {
+				comps["Velocity2D"] = ToJson(*c);
 			}
 
-			me::components::SpriteSheet ss{};
-			if (me::GetComponent(e, ss)) {
-				comps["SpriteSheet"] = ToJson(ss);
+			// -- AabbCollider --
+			if (auto* c = reg.TryGetComponent<me::components::AabbCollider>(e)) {
+				comps["AabbCollider"] = ToJson(*c);
 			}
 
-			me::components::AnimationPlayer ap{};
-			if (me::GetComponent(e, ap)) {
-				comps["AnimationPlayer"] = ToJson(ap);
+			// -- CircleCollider --
+			if (auto* c = reg.TryGetComponent<me::components::CircleCollider>(e)) {
+				comps["CircleCollider"] = ToJson(*c);
+			}
+
+			// -- SpriteSheet --
+			if (auto* c = reg.TryGetComponent<me::components::SpriteSheet>(e)) {
+				comps["SpriteSheet"] = ToJson(*c);
+			}
+
+			// -- AnimationPlayer --
+			if (auto* c = reg.TryGetComponent<me::components::AnimationPlayer>(e)) {
+				comps["AnimationPlayer"] = ToJson(*c);
 			}
 
 			je["components"] = std::move(comps);
 			root["entities"].push_back(std::move(je));
-			});
+		}
 
 		// <executable_dir>/scenes/<filename>
 		fs::path sceneDir = fs::current_path() / "scenes";
@@ -262,6 +311,9 @@ namespace me::scene {
 			if (!je.contains("components")) continue;
 			const auto& comps = je["components"];
 
+			// Helper macro or lambda to reduce boilerplate? 
+			// For clarity, we'll keep it explicit since types vary.
+
 			if (comps.contains("Transform2D")) {
 				me::components::Transform2D t{};
 				FromJson(comps["Transform2D"], t);
@@ -283,6 +335,12 @@ namespace me::scene {
 				}
 			}
 
+			if (comps.contains("CameraFollow")) {
+				me::components::CameraFollow cf{};
+				FromJson(comps["CameraFollow"], cf);
+				e.Add(cf);
+			}
+
 			if (comps.contains("Velocity2D")) {
 				me::components::Velocity2D v{};
 				FromJson(comps["Velocity2D"], v);
@@ -292,6 +350,12 @@ namespace me::scene {
 			if (comps.contains("AabbCollider")) {
 				me::components::AabbCollider col{};
 				FromJson(comps["AabbCollider"], col);
+				e.Add(col);
+			}
+
+			if (comps.contains("CircleCollider")) {
+				me::components::CircleCollider col{};
+				FromJson(comps["CircleCollider"], col);
 				e.Add(col);
 			}
 

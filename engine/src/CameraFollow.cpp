@@ -1,83 +1,43 @@
-#include "Entity.hpp"
-#include "Components.hpp"
 #include "CameraFollow.hpp"
+#include "Components.hpp"
+#include "Registry.hpp"
+#include "Entity.hpp"
 
-#include <raylib.h>
-
-#include <unordered_map>
-#include <utility>
 #include <cmath>
 
-namespace {
+namespace me::systems {
 
-	struct FollowRec {
-		me::EntityId target = 0;
-		me::camera::FollowParams params{};
-		bool initialized = false;
-	};
-
-	// camera entity -> follow record
-	std::unordered_map<me::EntityId, FollowRec> s_Following;
-
-	// exponential smoothing factor helper: 1 - exp(-k*dt)
-	inline float smoothFactor(float stiffness, float dt) {
-		if (stiffness <= 0.0f) return 1.0f; // instant
-		return 1.0f - std::exp(-stiffness * dt);
-	}
-}
-
-namespace me::camera {
-
-	void Attach(me::EntityId camera, me::EntityId target, const FollowParams& p) {
-		if (camera == 0 || target == 0) return;
-		s_Following[camera] = FollowRec{ target, p, false };
+	static float Lerp(float start, float end, float amount) {
+		return start + amount * (end - start);
 	}
 
-	void Detach(me::EntityId camera) {
-		s_Following.erase(camera);
-	}
+	void CameraFollow_Update(float dt) {
+		auto& reg = me::detail::Reg();
 
-	void Update(float dt) {
-		if (s_Following.empty()) return;
+		auto* pool = reg.TryGetPool<me::components::CameraFollow>();
+		if (!pool) return;
 
-		for (auto it = s_Following.begin(); it != s_Following.end(); ) {
-			const me::EntityId camE = it->first;
-			FollowRec& rec = it->second;
+		for (auto& kv : pool->data) {
+			me::EntityId camEntity = kv.first;
+			const auto& follow = kv.second;
 
-			// fetch camera component
-			me::components::Camera2D cam{};
-			if (!me::GetComponent(camE, cam)) {
-				// camera entity lost its component -> stop following
-				it = s_Following.erase(it);
-				continue;
-			}
+			auto* camT = reg.TryGetComponent<me::components::Transform2D>(camEntity);
+			if (!camT) continue;
 
-			// fetch target transform
-			me::components::Transform2D tt{};
-			if (!me::GetComponent(rec.target, tt)) {
-				// target gone -> stop following
-				it = s_Following.erase(it);
-				continue;
-			}
+			if (!me::IsAlive(follow.target)) continue;
 
-			const float desiredX = tt.x + rec.params.offsetX;
-			const float desiredY = tt.y + rec.params.offsetY;
+			auto* targetT = reg.TryGetComponent<me::components::Transform2D>(follow.target);
+			if (!targetT) continue;
 
-			if (rec.params.snapOnAttach && !rec.initialized) {
-				cam.x = desiredX;
-				cam.y = desiredY;
-				rec.initialized = true;
-			} else {
-				const float a = smoothFactor(rec.params.stiffness, dt); // [0..1]
-				cam.x = cam.x + (desiredX - cam.x) * a;
-				cam.y = cam.y + (desiredY - cam.y) * a;
-			}
+			// Logic
+			float targetX = targetT->x + follow.offsetX;
+			float targetY = targetT->y + follow.offsetY;
 
-			// write back camera component
-			me::AddComponent(camE, cam);
+			float t = follow.stiffness * dt;
+			if (t > 1.0f) t = 1.0f;
 
-			++it;
+			camT->x = Lerp(camT->x, targetX, t);
+			camT->y = Lerp(camT->y, targetY, t);
 		}
 	}
-
-} // namespace me::camera
+}

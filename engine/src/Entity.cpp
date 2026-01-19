@@ -1,26 +1,24 @@
 #include "Entity.hpp"
-#include "ComponentsInternal.hpp"
 #include "Registry.hpp"
-
-#include <raylib.h>
-
-#include <unordered_map>
-#include <utility>
+#include "Components.hpp"
 
 namespace me {
 
-	// -------- lifecycle --------
 	EntityId CreateEntity(const char* name) {
 		auto& reg = me::detail::Reg();
 		EntityId id = reg.nextId++;
+
 		me::detail::Registry::EntityRecord rec{};
 		rec.alive = true;
-		rec.transform = me::components::Transform2D{};
 		if (name && *name) {
 			rec.name = name;
-			reg.nameIndex[rec.name] = id; // keep name -> id in sync
+			reg.nameIndex[rec.name] = id;
 		}
 		reg.entities.emplace(id, std::move(rec));
+
+		// Transform2D gets added by default
+		reg.AddComponent<me::components::Transform2D>(id, {});
+
 		return id;
 	}
 
@@ -33,7 +31,6 @@ namespace me {
 	void DestroyEntity(EntityId e) {
 		auto& reg = me::detail::Reg();
 
-		// remove from name index (if present)
 		if (auto* rec = reg.Lookup(e)) {
 			if (!rec->name.empty()) {
 				auto it = reg.nameIndex.find(rec->name);
@@ -41,11 +38,17 @@ namespace me {
 			}
 		}
 
-		// notify components
-		me::detail::OnEntityDestroyed(e);
-		me::detail::OnEntityDestroyed_Camera(e);
-		me::detail::OnEntityDestroyed_Physics(e);
-		me::detail::OnEntityDestroyed_Animation(e);
+		// We assume systems clean up their own external resources (like Physics bodies)
+		// via the OnUpdate loops, but for Texture ref-counting, we might need a hook.
+		// For now, we rely on Assets::ReleaseUnused() being called periodically, 
+		// or we can explicitly check SpriteRenderer here.
+
+		if (auto* sr = reg.TryGetComponent<me::components::SpriteRenderer>(e)) {
+			me::assets::Release(sr->tex);
+		}
+		if (auto* ss = reg.TryGetComponent<me::components::SpriteSheet>(e)) {
+			me::assets::Release(ss->tex);
+		}
 
 		reg.EraseAllForEntity(e);
 		reg.entities.erase(e);
@@ -54,50 +57,32 @@ namespace me {
 	void DestroyAllEntities() {
 		auto& reg = me::detail::Reg();
 
-		for (const auto& kv : reg.entities) {
-			me::detail::OnEntityDestroyed(kv.first);
-			me::detail::OnEntityDestroyed_Camera(kv.first);
-			me::detail::OnEntityDestroyed_Physics(kv.first);
-			me::detail::OnEntityDestroyed_Animation(kv.first);
+		// Release assets for all sprites
+		auto* spritePool = reg.TryGetPool<me::components::SpriteRenderer>();
+		if (spritePool) {
+			for (auto& kv : spritePool->data) {
+				me::assets::Release(kv.second.tex);
+			}
+		}
+		auto* sheetPool = reg.TryGetPool<me::components::SpriteSheet>();
+		if (sheetPool) {
+			for (auto& kv : sheetPool->data) {
+				me::assets::Release(kv.second.tex);
+			}
 		}
 
 		reg.entities.clear();
-		reg.sprites.clear();
-		reg.cameras.clear();
-		reg.velocities.clear();
-		reg.colliders.clear();
 		reg.nameIndex.clear();
+
+		// Clearing entities map is enough, but to be safe we clear pools too
+		// We can't iterate m_pools easily from here without friendship or public access,
+		// but since Registry is destroyed/cleared on Shutdown, this is mostly for scene transitions.
+		// A helper in Registry would be better, but this works for now:
+		std::vector<EntityId> all;
+		for (auto& kv : reg.entities) all.push_back(kv.first);
+		for (auto e : all) reg.EraseAllForEntity(e);
 	}
 
-	// -------- Transform2D component (stored inside entity record) --------
-	void AddComponent(EntityId e, const me::components::Transform2D& c) {
-		auto& reg = me::detail::Reg();
-		auto* rec = reg.Lookup(e);
-		if (!rec) return;
-		rec->transform = c;
-	}
-
-	bool GetComponent(EntityId e, me::components::Transform2D& out) {
-		auto& reg = me::detail::Reg();
-		auto* rec = reg.Lookup(e);
-		if (!rec) return false;
-		out = rec->transform;
-		return true;
-	}
-
-	void RemoveComponent(EntityId e, me::components::Transform2D const&) {
-		auto& reg = me::detail::Reg();
-		auto* rec = reg.Lookup(e);
-		if (!rec) return;
-		rec->transform = me::components::Transform2D{};
-	}
-
-	bool HasTransform(EntityId e) {
-		auto& reg = me::detail::Reg();
-		return reg.Lookup(e) != nullptr;
-	}
-
-	// -------- Names --------
 	const char* GetName(EntityId e) {
 		auto& reg = me::detail::Reg();
 		auto* rec = reg.Lookup(e);
@@ -110,13 +95,11 @@ namespace me {
 		auto* rec = reg.Lookup(e);
 		if (!rec) return;
 
-		// erase old mapping (if any)
 		if (!rec->name.empty()) {
 			auto it = reg.nameIndex.find(rec->name);
 			if (it != reg.nameIndex.end() && it->second == e) reg.nameIndex.erase(it);
 		}
 
-		// set new name + mapping
 		rec->name = (name && *name) ? name : "";
 		if (!rec->name.empty()) reg.nameIndex[rec->name] = e;
 	}

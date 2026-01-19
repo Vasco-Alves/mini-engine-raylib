@@ -1,10 +1,9 @@
 add_executable(sandbox 
-	"src/main.cpp"
-	"src/generators/AsteroidGenerator.cpp"
+    src/main.cpp
 )
 
-# Link the engine library
+# Link against your Engine library
 target_link_libraries(sandbox PRIVATE engine)
 
-# (Optional) Auto-copy assets folder to the build directory so the game can find them
-file(COPY "${CMAKE_SOURCE_DIR}/assets" DESTINATION "${CMAKE_BINARY_DIR}/bin")
+# Copy assets if you have them (Optional)
+file(COPY "${CMAKE_SOURCE_DIR}/assets" DESTINATION "${CMAKE_BINARY_DIR}")

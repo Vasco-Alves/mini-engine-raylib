@@ -1,6 +1,7 @@
 #include "Assets.hpp"
 #include "Math.hpp"
 #include "Registry.hpp"
+#include "Components.hpp"
 
 #include <raylib.h>
 
@@ -146,23 +147,23 @@ namespace me::assets {
 	}
 
 	void ReleaseUnused() {
-		// Build a set of texture keys currently in use
 		std::unordered_set<std::string> inUse;
+		auto& reg = me::detail::Reg();
 
 		// 1) Collect from SpriteRenderer
-		for (const auto& kv : me::detail::Reg().sprites) {
-			const auto id = kv.second.tex;
-			if (id.handle == 0) continue;
-			auto it = s_HandleToPath.find(id.handle);
-			if (it != s_HandleToPath.end()) inUse.insert(it->second);
+		if (auto* pool = reg.TryGetPool<me::components::SpriteRenderer>()) {
+			for (const auto& kv : pool->data) {
+				auto it = s_HandleToPath.find(kv.second.tex.handle);
+				if (it != s_HandleToPath.end()) inUse.insert(it->second);
+			}
 		}
 
 		// 2) Collect from SpriteSheet
-		for (const auto& kv : me::detail::Reg().animSheets) {
-			const auto id = kv.second.tex;
-			if (id.handle == 0) continue;
-			auto it = s_HandleToPath.find(id.handle);
-			if (it != s_HandleToPath.end()) inUse.insert(it->second);
+		if (auto* pool = reg.TryGetPool<me::components::SpriteSheet>()) {
+			for (const auto& kv : pool->data) {
+				auto it = s_HandleToPath.find(kv.second.tex.handle);
+				if (it != s_HandleToPath.end()) inUse.insert(it->second);
+			}
 		}
 
 		// 3) Sweep anything not inUse

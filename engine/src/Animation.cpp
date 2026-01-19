@@ -1,48 +1,37 @@
 #include "Animation.hpp"
-#include "Entity.hpp"
-#include"Registry.hpp"
+#include "Components.hpp"
+#include "Registry.hpp"
 
-#include <raylib.h>
+namespace me::systems {
 
-
-namespace me::anim {
-
-	void Update(float dt) {
-		if (dt <= 0.0f) return;                 // ignore non-positive dt
-		if (dt > 0.1f) dt = 0.1f;               // clamp huge spikes (~10 FPS)
-
+	void Animation_Update(float dt) {
 		auto& reg = me::detail::Reg();
+		auto* pool = reg.GetPool<me::components::AnimationPlayer>();
 
-		// Iterate all entities with AnimationPlayer; require a SpriteSheet to animate
-		for (auto& [e, ap] : reg.animPlayers) {
-			if (!ap.playing) continue;
+		for (auto& kv : pool->data) {
+			me::EntityId e = kv.first;
+			auto& anim = kv.second;
 
-			// must have a sheet
-			auto itS = reg.animSheets.find(e);
-			if (itS == reg.animSheets.end()) continue;
-			const auto& ss = itS->second;
+			if (!anim.playing) continue;
 
-			// basic validation of sheet + player
-			if (ss.frameCount <= 0 || ss.frameW <= 0 || ss.frameH <= 0) continue;
-			if (ap.fps <= 0.0f) continue;       // <-- fps is on the player
+			// Need a sheet to know frame count
+			auto* sheet = reg.TryGetComponent<me::components::SpriteSheet>(e);
+			if (!sheet || sheet->frameCount <= 0) continue;
 
-			// keep current in-range (useful after scene loads or clip changes)
-			const int start = ss.startIndex;
-			const int end = ss.startIndex + ss.frameCount - 1;
-			if (ap.current < start || ap.current > end) ap.current = start;
+			anim.timeAccum += dt;
+			float frameDur = 1.0f / (anim.fps > 0 ? anim.fps : 1.0f);
 
-			// advance time
-			ap.timeAccum += dt;
-			const float frameDur = 1.0f / ap.fps;
+			if (anim.timeAccum >= frameDur) {
+				anim.timeAccum -= frameDur;
+				anim.current++;
 
-			// advance frames (handles large dt by stepping multiple frames)
-			while (ap.timeAccum >= frameDur) {
-				ap.timeAccum -= frameDur;
-				++ap.current;
-
-				if (ap.current > end) {
-					if (ap.loop) ap.current = start;
-					else { ap.current = end; ap.playing = false; break; }
+				if (anim.current >= sheet->frameCount) {
+					if (anim.loop) {
+						anim.current = 0;
+					} else {
+						anim.current = sheet->frameCount - 1;
+						anim.playing = false;
+					}
 				}
 			}
 		}

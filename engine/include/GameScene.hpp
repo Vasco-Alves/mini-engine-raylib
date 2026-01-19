@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Scene.hpp"
+#include "Color.hpp"
 
 namespace me::scene {
 
@@ -8,16 +9,22 @@ namespace me::scene {
 	public:
 		virtual ~GameScene() = default;
 
-		// Unique name used by the manager (e.g. "Base", "Space")
-		virtual const char* GetName() const = 0;
-
-		// JSON file for this scene, or "" / nullptr for code-only scenes
-		virtual const char* GetFile() const { return ""; }
-
 		// convenience: save this scene's world back to its file
 		bool SaveSelf() const {
 			const char* file = GetFile();
 			return (file && *file) ? me::scene::Save(file) : false;
+		}
+
+		virtual const char* GetName() const = 0;
+
+		// JSON file for this scene, or "" / nullptr for code-only scenes
+		virtual const char* GetFile() const {
+			return "";
+		}
+
+
+		virtual me::Color GetClearColor() const {
+			return me::Color{ 20, 20, 20, 255 };
 		}
 
 		// Optional hooks

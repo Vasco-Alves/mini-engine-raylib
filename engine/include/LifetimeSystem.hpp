@@ -1,5 +1,5 @@
 #pragma once
 
 namespace me::systems {
-	void CameraFollow_Update(float dt);
+	void Lifetime_Update(float dt);
 }

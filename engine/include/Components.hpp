@@ -1,10 +1,10 @@
 #pragma once
 
-#include <cstdint>
-
 #include "Assets.hpp"
 #include "Color.hpp"
 #include "Audio.hpp" 
+
+namespace me { using EntityId = std::uint32_t; }
 
 namespace me::components {
 
@@ -23,9 +23,7 @@ namespace me::components {
 	};
 
 	struct Camera2D {
-		float x = 0.0f, y = 0.0f;
 		float zoom = 1.0f;
-		float rotation = 0.0f;
 		bool  active = false;
 	};
 
@@ -53,25 +51,47 @@ namespace me::components {
 		bool  solid = true;
 	};
 
-	// Flipbook sheet description(static data about the atlas)
 	struct SpriteSheet {
 		me::assets::TextureId tex{};
 		int frameW = 0;
 		int frameH = 0;
 		int startIndex = 0;
 		int frameCount = 0;
-		int margin = 0;   // optional padding around the sheet
-		int spacing = 0;  // optional spacing between frames
-		int cols = 0;     // 0 = auto compute from texture width
+		int margin = 0;
+		int spacing = 0;
+		int cols = 0;
 	};
 
-	// Runtime animation state (per-entity clock)
 	struct AnimationPlayer {
-		int   current = 0;     // absolute frame index (sheet-local)
-		float fps = 8.0f;
+		int   current = 0;
+		float fps = 12.0f;
 		bool  loop = true;
 		bool  playing = true;
-		float timeAccum = 0.0f;  // seconds
+		float timeAccum = 0.0f;
+	};
+
+	struct CameraFollow {
+		me::EntityId target = 0;
+		float stiffness = 5.0f;
+		float deadzone = 0.0f;
+		float offsetX = 0.0f;
+		float offsetY = 0.0f;
+	};
+
+	struct Lifetime {
+		float remaining = 1.0f;
+	};
+
+	struct Projectile {
+		int damage = 10;
+		me::EntityId owner = 0;
+	};
+
+	struct Hittable {};
+
+	struct Health {
+		int current = 100;
+		int max = 100;
 	};
 
 } // namespace me::components
