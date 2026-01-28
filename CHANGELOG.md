@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.0] - 2026-01-28
+### Architectual Refactor
+- **Namespace Organization:** Moved core systems into dedicated namespaces (`me::physics`,  `me::lifetime`,  `me::animation`) to replace the generic `me::systems` prefix.
+- **Decoupling:** Removed gameplay-specific components (`Projectile`,  `Hittable`,  `Health`) from the core engine. These are now implemented as user-defined components in the Sandbox to demonstrate engine extensibility.
+- **Cleanup:** Deleted `ProjectileSystem` source and headers from the engine core.
+
+### Added
+- **Debug Colors:** Added `me::Color` fields to `AabbCollider` and `CircleCollider` components, allowing per-entity debug visualization colors.
+- **Color API:** Added `ToHex()` and `ToHexRGB()` helper methods to `me::Color`.
+- **Sandbox Implementation:** Implemented a robust "Game Loop" pattern in the Sandbox (`Input` -> `Logic` -> `Physics` -> `Reaction` -> `Render`) and added custom `Health` and `Projectile` logic.
+
+### Changed
+-   **Debug Drawing:** Updated `DebugDraw` to internally handle `me::Color` to Raylib conversion, preserving the engine's abstraction layer.
+-   **System API:** Renamed system update functions to a standardized `Update(dt)` (e.g.,  `me::physics::Update`).
+
 ## [0.3.0] - 2026-01-19
 ### Architectual Overhaul
 - **Pure ECS Transition:** Refactored the core Engine to use a generic Registry with `Pool<T>`. Components are no longer hardcoded in the engine maps.

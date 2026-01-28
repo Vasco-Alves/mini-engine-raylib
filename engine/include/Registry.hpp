@@ -15,13 +15,6 @@ namespace me::detail {
 		struct EntityRecord {
 			bool alive = false;
 			std::string name;
-			// Note: Transform2D is treated as a component now, 
-			// but we can keep it here for fast access if desired, 
-			// OR move it to a pool. For this refactor, let's keep it consistent
-			// and treat it as just another component in the Entity.hpp wrappers.
-			// However, to strictly match your old logic where CreateEntity made a Transform,
-			// we can leave it or move it. 
-			// Let's Move it to the Pool system for full purity!
 		};
 
 		std::unordered_map<me::EntityId, EntityRecord> entities;
@@ -29,7 +22,6 @@ namespace me::detail {
 		me::EntityId nextId = 1;
 
 	private:
-		// Map from Type to Pool
 		std::unordered_map<std::type_index, std::unique_ptr<IPool>> m_pools;
 
 	public:
@@ -40,7 +32,6 @@ namespace me::detail {
 		}
 
 		// --- Generic Component API ---
-
 		template <typename T>
 		Pool<T>* GetPool() {
 			auto typeId = std::type_index(typeid(T));
@@ -86,13 +77,13 @@ namespace me::detail {
 
 		// Wipe entity from ALL pools
 		void EraseAllForEntity(me::EntityId e) {
-			for (auto& pair : m_pools) {
+			for (auto& pair : m_pools)
 				pair.second->Remove(e);
-			}
 		}
 
 		inline void ForEachEntity(const std::function<void(me::EntityId)>& fn) const {
-			for (const auto& kv : entities) fn(kv.first);
+			for (const auto& kv : entities)
+				fn(kv.first);
 		}
 	};
 

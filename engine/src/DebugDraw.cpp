@@ -8,6 +8,11 @@
 
 namespace me::dbg {
 
+	// --- Helper: Convert me::Color to Raylib Color ---
+	static ::Color ToRay(const me::Color& c) {
+		return ::Color{ c.r, c.g, c.b, c.a };
+	}
+
 	// ------------------------------------------------------------
 	// Screen-space debug text
 	// ------------------------------------------------------------
@@ -24,10 +29,7 @@ namespace me::dbg {
 	// Helpers
 	// ------------------------------------------------------------
 
-	static void DrawAabbWorld(me::EntityId,
-		const me::components::Transform2D& t,
-		const me::components::AabbCollider& c) {
-
+	static void DrawAabbWorld(me::EntityId, const me::components::Transform2D& t, const me::components::AabbCollider& c) {
 		// Collider center in world space
 		float cx = t.x + c.ox;
 		float cy = t.y + c.oy;
@@ -36,7 +38,7 @@ namespace me::dbg {
 		float x = cx - c.w * 0.5f;
 		float y = cy - c.h * 0.5f;
 
-		DrawRectangleLines((int)x, (int)y, (int)c.w, (int)c.h, ::RED);
+		DrawRectangleLines((int)x, (int)y, (int)c.w, (int)c.h, ToRay(c.color));
 	}
 
 	static void DrawCircleWorld(me::EntityId,
@@ -46,7 +48,7 @@ namespace me::dbg {
 		float cx = t.x + c.ox;
 		float cy = t.y + c.oy;
 
-		DrawCircleLines((int)cx, (int)cy, c.radius, ::GREEN);
+		DrawCircleLines((int)cx, (int)cy, c.radius, ToRay(c.color));
 	}
 
 	// ------------------------------------------------------------

@@ -24,12 +24,7 @@ namespace me {
 
 	// Run the main engine loop with a given game app.
 	// Blocks until the window closes or OnUpdate triggers a quit.
-	void Run(GameApp& app,
-		const char* title = "MiniEngine Game",
-		int width = 1280,
-		int height = 720,
-		bool vsync = true,
-		int targetFps = 60);
+	void Run(GameApp& app, const char* title = "MiniEngine Game", int width = 1280, int height = 720, bool vsync = true, int targetFps = 60);
 
 	// Requests the engine loop to exit (safe to call from OnUpdate)
 	void RequestQuit();

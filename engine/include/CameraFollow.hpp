@@ -1,5 +1,7 @@
 #pragma once
 
-namespace me::systems {
-	void CameraFollow_Update(float dt);
+namespace me::camera {
+
+	void UpdateFollow(float dt);
+
 }

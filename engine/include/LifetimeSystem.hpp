@@ -1,5 +1,7 @@
 #pragma once
 
-namespace me::systems {
-	void Lifetime_Update(float dt);
+namespace me::lifetime {
+
+	void Update(float dt);
+
 }

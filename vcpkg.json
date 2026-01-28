@@ -1,7 +1,8 @@
 {
-    "name": "mini-engine",
-    "dependencies": [
-        "raylib",
-        "nlohmann-json"
-    ]
+  "name": "mini-engine",
+  "description": "A simple game engine built with Raylib",
+  "dependencies": [
+    "raylib",
+    "nlohmann-json"
+  ]
 }

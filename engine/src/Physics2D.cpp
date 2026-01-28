@@ -182,11 +182,7 @@ namespace me::physics2d {
 		g_minX = minX; g_minY = minY; g_maxX = maxX; g_maxY = maxY;
 	}
 
-}
-
-namespace me::systems {
-
-	void Step(float dt) {
+	void Update(float dt) {
 		auto& reg = me::detail::Reg();
 
 		// We need the Velocity pool to find dynamic bodies
@@ -457,12 +453,12 @@ namespace me::systems {
 	}
 
 	void StepFixed(float dt, float fixedStep, float& acc) {
-		if (fixedStep <= 0.0f) { Step(dt); return; }
+		if (fixedStep <= 0.0f) { Update(dt); return; }
 		const int maxSteps = 5;
 		acc += dt;
 		int steps = 0;
 		while (acc >= fixedStep && steps < maxSteps) {
-			Step(fixedStep);
+			Update(fixedStep);
 			acc -= fixedStep;
 			++steps;
 		}
@@ -470,3 +466,4 @@ namespace me::systems {
 	}
 
 }
+

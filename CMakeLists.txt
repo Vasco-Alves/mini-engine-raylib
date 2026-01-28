@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 
 project(
     "mini-engine"
-    VERSION 0.3.0
-    DESCRIPTION "A simple 2D game engine built with Raylib"
+    VERSION 0.4.0
+    DESCRIPTION "A simple game engine built with Raylib"
     LANGUAGES CXX
 )
 
@@ -20,18 +20,15 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 add_subdirectory(engine)
 
-if (CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
-    
-    # We are running "MiniEngine" directly (Dev Mode)
+# Running "MiniEngine" directly (Dev Mode)
+if (CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR) 
     option(BUILD_SANDBOX "Build the sandbox application" ON)
-
     if (BUILD_SANDBOX)
         add_subdirectory(sandbox)
     endif()
 
+# Being included by another game (User Mode)
 else()
-    
-    # We are being included by another game (User Mode)
     message(STATUS "MiniEngine included as a library. Sandbox disabled.")
 
 endif()

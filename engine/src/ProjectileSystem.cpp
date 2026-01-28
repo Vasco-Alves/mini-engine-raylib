@@ -27,9 +27,9 @@ namespace {
 	}
 }
 
-namespace me::systems {
+namespace me::projectile {
 
-	void Projectile_Update(float dt) {
+	void Update(float dt) {
 		auto& reg = me::detail::Reg();
 
 		// 1. Get Pools

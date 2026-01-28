@@ -1,5 +1,7 @@
 #pragma once
 
-namespace me::systems {
-	void Animation_Update(float dt);
+namespace me::animation {
+
+	void Update(float dt);
+
 }

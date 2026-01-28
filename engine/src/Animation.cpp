@@ -2,9 +2,9 @@
 #include "Components.hpp"
 #include "Registry.hpp"
 
-namespace me::systems {
+namespace me::animation {
 
-	void Animation_Update(float dt) {
+	void Update(float dt) {
 		auto& reg = me::detail::Reg();
 		auto* pool = reg.GetPool<me::components::AnimationPlayer>();
 
@@ -37,4 +37,4 @@ namespace me::systems {
 		}
 	}
 
-} // namespace me::anim
+} // namespace me::animation

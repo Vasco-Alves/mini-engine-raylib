@@ -1,0 +1,35 @@
+void OnUpdate(float dt) override {
+    // PHASE 1: INPUT & DECISION MAKING
+    // -------------------------------------------------
+    if (me::input::ActionPressed("Quit")) me::RequestQuit();
+
+    // Run Scene Logic (Player Input, AI decisions, Spawning)
+    // This sets velocities and creates entities for the frame.
+    me::scene::manager::Update(dt); 
+
+
+    // PHASE 2: SIMULATION (The World Moves)
+    // -------------------------------------------------
+    // Physics must run AFTER logic (so it uses new velocities) 
+    // but BEFORE Camera/Combat (so they see new positions).
+    me::physics::Step(dt); 
+
+
+    // PHASE 3: REACTION (Consequences of Movement)
+    // -------------------------------------------------
+
+    // 1. Camera: Move camera to where the player IS now (prevents jitter).
+    me::systems::CameraFollow_Update(dt);
+
+    // 2. Cleanup: Remove dead entities (from combat or old age)
+    me::lifetime::Update(dt);
+
+
+    // PHASE 4: VISUAL STATE
+    // -------------------------------------------------
+    // Advance animations (independent of physics usually)
+    me::animation::Update(dt);
+    
+    // Update music buffers
+    me::audio::Update();
+}

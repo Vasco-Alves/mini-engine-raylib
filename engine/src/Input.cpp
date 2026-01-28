@@ -11,7 +11,6 @@
 
 namespace me::input {
 
-	// ---------------- internal state ----------------
 	namespace {
 		// Actions
 		std::unordered_map<std::string, std::vector<Key>>         s_ActionKeyBindings;

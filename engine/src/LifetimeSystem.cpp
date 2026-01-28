@@ -3,9 +3,9 @@
 #include "Registry.hpp"
 #include "Entity.hpp"
 
-namespace me::systems {
+namespace me::lifetime {
 
-	void Lifetime_Update(float dt) {
+	void Update(float dt) {
 		auto& reg = me::detail::Reg();
 
 		// Use TryGetPool to avoid creating it if no lifetimes exist yet

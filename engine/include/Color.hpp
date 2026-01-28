@@ -12,8 +12,21 @@ namespace me {
 
 		constexpr Color() = default;
 
-		constexpr Color(std::uint8_t rr, std::uint8_t gg, std::uint8_t bb, std::uint8_t aa = 255) noexcept
-			: r(rr), g(gg), b(bb), a(aa) {
+		constexpr Color(std::uint8_t rr, std::uint8_t gg, std::uint8_t bb, std::uint8_t aa = 255) noexcept : r(rr), g(gg), b(bb), a(aa) {}
+
+		// Returns 0xRRGGBBAA
+		constexpr std::uint32_t ToHex() const noexcept {
+			return (static_cast<std::uint32_t>(r) << 24) |
+				(static_cast<std::uint32_t>(g) << 16) |
+				(static_cast<std::uint32_t>(b) << 8) |
+				static_cast<std::uint32_t>(a);
+		}
+
+		// Returns 0x00RRGGBB (Useful for web/debug, ignores Alpha)
+		constexpr std::uint32_t ToHexRGB() const noexcept {
+			return (static_cast<std::uint32_t>(r) << 16) |
+				(static_cast<std::uint32_t>(g) << 8) |
+				static_cast<std::uint32_t>(b);
 		}
 
 		// 0xRRGGBBAA

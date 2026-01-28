@@ -42,6 +42,7 @@ namespace me::components {
 		float ox = 0.0f;    // offset from Transform2D.x/y
 		float oy = 0.0f;
 		bool  solid = true; // if false, passes through (still detectable later if needed)
+		me::Color color = me::Color::Red;
 	};
 
 	struct CircleCollider {
@@ -49,6 +50,7 @@ namespace me::components {
 		float ox = 0.0f;       // offset from Transform2D.x/y to center
 		float oy = 0.0f;
 		bool  solid = true;
+		me::Color color = me::Color::Green;
 	};
 
 	struct SpriteSheet {
@@ -80,18 +82,6 @@ namespace me::components {
 
 	struct Lifetime {
 		float remaining = 1.0f;
-	};
-
-	struct Projectile {
-		int damage = 10;
-		me::EntityId owner = 0;
-	};
-
-	struct Hittable {};
-
-	struct Health {
-		int current = 100;
-		int max = 100;
 	};
 
 } // namespace me::components

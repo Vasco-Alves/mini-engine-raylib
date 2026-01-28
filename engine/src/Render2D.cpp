@@ -20,6 +20,8 @@ namespace {
 
 namespace me::render2d {
 
+	void DrawSprite(const SpriteDesc& s) {}
+
 	void SetActiveCamera(me::EntityId e) {
 		s_ActiveCamera = e;
 	}
@@ -133,6 +135,9 @@ namespace me::render2d {
 
 			DrawTexturePro(*tex, src, dst, origin, it.tr->rotation, tint);
 		}
+	}
+
+	void RenderWorldWithCamera(me::EntityId camera, int x, int y, int w, int h) {
 	}
 
 	void ClearWorld(const me::Color& clearColor) {

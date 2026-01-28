@@ -5,13 +5,13 @@
 
 #include <cmath>
 
-namespace me::systems {
+namespace me::camera {
 
 	static float Lerp(float start, float end, float amount) {
 		return start + amount * (end - start);
 	}
 
-	void CameraFollow_Update(float dt) {
+	void UpdateFollow(float dt) {
 		auto& reg = me::detail::Reg();
 
 		auto* pool = reg.TryGetPool<me::components::CameraFollow>();
