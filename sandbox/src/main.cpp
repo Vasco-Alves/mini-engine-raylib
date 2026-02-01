@@ -34,74 +34,51 @@ struct Hittable {};
 void CombatSystem_Update(float dt) {
 	auto& reg = me::detail::Reg();
 
-	// 1. Get Pools
-	auto* projPool = reg.TryGetPool<Projectile>();
-	auto* hitPool = reg.TryGetPool<Hittable>();
+	// 1. Get Physics Collisions from this frame
+	const auto& collisions = me::physics::GetCollisions();
 
-	if (!projPool || !hitPool) return;
+	// 2. Iterate collisions to check for Projectile vs Hittable
+	for (const auto& col : collisions) {
+		me::EntityId a = col.a;
+		me::EntityId b = col.b;
 
-	// Helper to calculate overlap
-	auto Overlap = [](float cx, float cy, float r, float bx, float by, float bw, float bh) {
-		float closestX = std::max(bx, std::min(cx, bx + bw));
-		float closestY = std::max(by, std::min(cy, by + bh));
-		float dx = cx - closestX;
-		float dy = cy - closestY;
-		return (dx * dx + dy * dy) <= (r * r);
-		};
+		// We don't know if 'a' is the bullet or 'b' is the bullet.
+		// Helper lambda to check:
+		auto TryHit = [&](me::EntityId bullet, me::EntityId victim) {
 
-	// 2. Iterate Projectiles
-	struct HitEvent { me::EntityId bullet; me::EntityId victim; };
-	std::vector<HitEvent> hits;
+			// Check if 'bullet' is actually a projectile
+			auto* proj = reg.TryGetComponent<Projectile>(bullet);
+			if (!proj)
+				return false;
 
-	for (auto& pKv : projPool->data) {
-		me::EntityId pId = pKv.first;
-		const auto& proj = pKv.second;
+			// Check if 'victim' is hittable
+			if (!reg.HasComponent<Hittable>(victim))
+				return false;
 
-		auto* pT = reg.TryGetComponent<me::components::Transform2D>(pId);
-		// Assuming bullets are CircleColliders for simplicity here
-		auto* pCol = reg.TryGetComponent<me::components::CircleCollider>(pId);
+			// Don't hit itself
+			if (proj->owner == victim)
+				return false;
 
-		if (!pT || !pCol) continue;
+			// --- HIT CONFIRMED ---
 
-		// Check against Hittables
-		for (auto& hKv : hitPool->data) {
-			me::EntityId tId = hKv.first;
-			if (tId == proj.owner) continue; // Don't hit owner
-
-			auto* tT = reg.TryGetComponent<me::components::Transform2D>(tId);
-			auto* tCol = reg.TryGetComponent<me::components::AabbCollider>(tId);
-
-			if (!tT || !tCol) continue;
-
-			// Simple Circle vs AABB check
-			// (Bullet is circle, Wall/Enemy is AABB)
-			float boxX = tT->x + tCol->ox - tCol->w * 0.5f;
-			float boxY = tT->y + tCol->oy - tCol->h * 0.5f;
-
-			if (Overlap(pT->x + pCol->ox, pT->y + pCol->oy, pCol->radius,
-				boxX, boxY, tCol->w, tCol->h)) {
-				hits.push_back({ pId, tId });
-				break; // Bullet hits one thing and stops
-			}
-		}
-	}
-
-	// 3. Resolve Hits
-	for (const auto& ev : hits) {
-		if (!me::IsAlive(ev.bullet) || !me::IsAlive(ev.victim)) continue;
-
-		auto* pData = reg.TryGetComponent<Projectile>(ev.bullet);
-		if (pData) {
-			if (auto* hp = reg.TryGetComponent<Health>(ev.victim)) {
-				hp->current -= pData->damage;
+			// Apply Damage
+			if (auto* hp = reg.TryGetComponent<Health>(victim)) {
+				hp->current -= proj->damage;
 				std::cout << "Hit! HP: " << hp->current << "\n";
 				if (hp->current <= 0) {
-					me::DestroyEntity(ev.victim);
+					me::DestroyEntity(victim);
 					std::cout << "Enemy Destroyed!\n";
 				}
 			}
-		}
-		me::DestroyEntity(ev.bullet);
+
+			// Destroy Bullet
+			me::DestroyEntity(bullet);
+			return true;
+			};
+
+		// Try both combinations: A hits B, or B hits A
+		if (TryHit(a, b)) continue;
+		TryHit(b, a);
 	}
 }
 
@@ -182,6 +159,8 @@ public:
 		me::input::BindAction("Quit", me::input::Key::Escape);
 		me::scene::manager::Register(&level1);
 		me::scene::manager::Load("Level1");
+
+		me::physics::SetGravity(0, 0);
 	}
 
 	void OnUpdate(float dt) override {
@@ -189,7 +168,7 @@ public:
 			me::RequestQuit();
 
 		me::scene::manager::Update(dt);
-		me::physics2d::Update(dt);
+		me::physics::Update(dt);
 		CombatSystem_Update(dt);
 		me::lifetime::Update(dt);
 	}
