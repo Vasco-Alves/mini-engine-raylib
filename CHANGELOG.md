@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.0] - 2026-02-01
+### 3D Transformation
+- **Core Pivot:** The engine is now natively 3D.
+- **Transform:** Replaced `Transform2D` with `Transform`. Now supports `x, y, z`, Euler rotation (`rotX, rotY, rotZ`), and 3D scale.
+- **Rendering:** Removed `Render2D` and `SpriteRenderer`. Added `Render3D` and `MeshRenderer` (supporting `Cube`, `Sphere`, and `Plane` primitives).
+
+### Added
+- **Camera System:** Added `me::camera::UpdateFreeFly()` for decoupled FPS-style camera movement (WASD moves flatly, Mouse looks freely).
+- **Camera Helpers:** Added `me::camera::LookAt()` to automatically calculate Pitch and Yaw to face a target position.
+- **Input Defaults:** Updated `InputDefaults` to support 3D axes (`MoveZ` on W/S, `MoveY` on Q/E).
+
+### Changed
+- **Serialization:** Updated `Scene::Save` and `Scene::Load` to handle the new 3D component structures (JSON format updated).
+- **Entity Creation:** `CreateEntity` now attaches a 3D `Transform` by default.
+
+### Removed
+- **2D Systems:** Temporarily removed `Physics2D`, `Animation`, and `DebugDraw` from the build pipeline to facilitate the 3D transition.
+
 ## [0.4.0] - 2026-01-28
 ### Architectual Refactor
 - **Namespace Organization:** Moved core systems into dedicated namespaces (`me::physics`,  `me::lifetime`,  `me::animation`) to replace the generic `me::systems` prefix.

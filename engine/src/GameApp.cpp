@@ -1,7 +1,6 @@
 #include "GameApp.hpp"
 #include "Engine.hpp"
 #include "Time.hpp"
-#include "Render2D.hpp"
 #include "Input.hpp"
 
 namespace {
