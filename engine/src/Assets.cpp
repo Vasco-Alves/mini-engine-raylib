@@ -45,7 +45,7 @@ namespace me::assets {
 		}
 	} // namespace
 
-	// ---- internal access for Render2D (not exposed in public headers) ----
+	// ---- internal access for Render2D/3D (not exposed in public headers) ----
 	const ::Texture2D* ME_InternalGetTexture(TextureId id) {
 		if (id.handle == 0) return nullptr;
 		auto itPath = s_HandleToPath.find(id.handle);
@@ -147,26 +147,14 @@ namespace me::assets {
 	}
 
 	void ReleaseUnused() {
+		// [FIX] Disabled for 3D refactor because SpriteRenderer/SpriteSheet no longer exist.
+		// If you implement a MeshRenderer that uses textures later, you can add that check here.
+
+		/*
 		std::unordered_set<std::string> inUse;
 		auto& reg = me::detail::Reg();
 
-		// 1) Collect from SpriteRenderer
-		if (auto* pool = reg.TryGetPool<me::components::SpriteRenderer>()) {
-			for (const auto& kv : pool->data) {
-				auto it = s_HandleToPath.find(kv.second.tex.handle);
-				if (it != s_HandleToPath.end()) inUse.insert(it->second);
-			}
-		}
-
-		// 2) Collect from SpriteSheet
-		if (auto* pool = reg.TryGetPool<me::components::SpriteSheet>()) {
-			for (const auto& kv : pool->data) {
-				auto it = s_HandleToPath.find(kv.second.tex.handle);
-				if (it != s_HandleToPath.end()) inUse.insert(it->second);
-			}
-		}
-
-		// 3) Sweep anything not inUse
+		// Sweep anything not inUse
 		for (auto it = s_ByPath.begin(); it != s_ByPath.end(); ) {
 			if (inUse.find(it->first) == inUse.end()) {
 				UnloadTexture(it->second.tex);
@@ -176,11 +164,12 @@ namespace me::assets {
 			}
 		}
 
-		// 4) Rebuild handle map to only include still-alive paths (optional, but tidy)
+		// Rebuild handle map
 		for (auto it = s_HandleToPath.begin(); it != s_HandleToPath.end(); ) {
 			if (s_ByPath.find(it->second) == s_ByPath.end()) it = s_HandleToPath.erase(it);
 			else ++it;
 		}
+		*/
 	}
 
 	bool IsTextureValid(TextureId id) {

@@ -1,5 +1,5 @@
 {
-  "name": "mini-engine",
+  "name": "mini-engine-raylib",
   "description": "A simple game engine built with Raylib",
   "dependencies": [
     "raylib",

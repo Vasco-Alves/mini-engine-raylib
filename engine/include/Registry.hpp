@@ -25,7 +25,7 @@ namespace me::detail {
 		std::unordered_map<std::type_index, std::unique_ptr<IPool>> m_pools;
 
 	public:
-		inline EntityRecord* Lookup(me::EntityId e) {
+		EntityRecord* Lookup(me::EntityId e) {
 			if (e == 0) return nullptr;
 			auto it = entities.find(e);
 			return (it == entities.end()) ? nullptr : &it->second;

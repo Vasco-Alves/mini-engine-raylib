@@ -1,23 +1,33 @@
 #include "InputDefaults.hpp"
+#include "Input.hpp"
 
 namespace me::input {
 
 	void SetupDefaultBindings() {
-		// Movement: WASD and arrows
+		// --- Movement: WASD and Arrows ---
+
+		// Strafe (X)
 		BindDigitalAxis("MoveX", Key::A, Key::D, 1.0f);
 		BindDigitalAxis("MoveX", Key::Left, Key::Right, 1.0f);
 
-		BindDigitalAxis("MoveY", Key::W, Key::S, 1.0f);
-		BindDigitalAxis("MoveY", Key::Up, Key::Down, 1.0f);
+		// Forward/Back (Z)
+		BindDigitalAxis("MoveZ", Key::W, Key::S, 1.0f);
+		BindDigitalAxis("MoveZ", Key::Up, Key::Down, 1.0f);
 
-		// Look with mouse deltas
+		// --- Look: Mouse ---
 		BindAxis("LookX", Axis::MouseX, 0.1f);
 		BindAxis("LookY", Axis::MouseY, 0.1f);
 
-		// Shape input: clamp & deadzone
+		// --- Configuration (Deadzone & Clamping) ---
+
 		SetAxisDeadzone("MoveX", 0.25f);
 		SetAxisClamp("MoveX", -1.0f, 1.0f);
 
+		// Added MoveZ config so W/S feels the same as A/D
+		SetAxisDeadzone("MoveZ", 0.25f);
+		SetAxisClamp("MoveZ", -1.0f, 1.0f);
+
+		// MoveY (Vertical/Fly) - Not bound by default, but configured just in case
 		SetAxisDeadzone("MoveY", 0.25f);
 		SetAxisClamp("MoveY", -1.0f, 1.0f);
 

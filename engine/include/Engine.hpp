@@ -3,9 +3,9 @@
 namespace me {
 
 	struct EngineConfig {
+		const char* title = "MiniEngine";
 		int width = 1280;
 		int height = 720;
-		const char* title = "MiniEngine";
 		bool vsync = false;
 		int targetFps = 0;
 	};
