@@ -73,5 +73,5 @@ namespace me::input {
 	// -------- raw mouse helpers (no bindings required) --------
 	me::math::Vec2  MousePosition();     // window coordinates
 	me::math::Vec2  MouseDelta();        // delta since last frame
-	float MouseWheelDelta();   // wheel delta this frame
+	float			MouseWheelDelta();   // wheel delta this frame
 }
