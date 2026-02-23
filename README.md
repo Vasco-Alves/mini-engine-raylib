@@ -1,6 +1,6 @@
-# MiniEngine
+# MiniEngineRaylib
 
-**MiniEngine** is a lightweight, modular **2D game engine** written in **C++**, built on top of [Raylib](https://www.raylib.com/).  
+**MiniEngineRaylib** is a lightweight, modular **2D game engine** written in **C++**, built on top of [Raylib](https://www.raylib.com/).  
 It is designed to be simple, minimal, and educational — ideal for learning engine architecture or building small games.
 
 ## Features
@@ -143,7 +143,7 @@ public:
 int main() {
     MyGame game;
     me::Run(game,
-     "MiniEngine Example",
+     "MiniEngineRaylib Example",
       1280, // width
       720,  // height
       false, // vsync
@@ -154,7 +154,7 @@ int main() {
 
 ## Future Improvements & Roadmap
 
-MiniEngine is intentionally small and educational, but there’s plenty of room to grow. Below are posible ideas for future iterations and contributions:
+MiniEngineRaylib is intentionally small and educational, but there’s plenty of room to grow. Below are posible ideas for future iterations and contributions:
 
 ### Core Systems
 
@@ -184,7 +184,7 @@ MiniEngine is intentionally small and educational, but there’s plenty of room 
 
 ## Integrations
 
-While MiniEngine currently focuses on minimal custom systems, it leverages robust industry standards where it matters:
+While MiniEngineRaylib currently focuses on minimal custom systems, it leverages robust industry standards where it matters:
 
 - **[Raylib](https://github.com/raysan5/raylib)**: Windowing, Audio, and Rendering backend.
 
@@ -193,7 +193,7 @@ While MiniEngine currently focuses on minimal custom systems, it leverages robus
 Possible future dependencies:
 
 - **[EnTT](https://github.com/skypjack/entt)** – A high-performance, modern C++ Entity-Component-System library.  
-  Could replace or back MiniEngine’s custom ECS for large-scale projects.
+  Could replace or back MiniEngineRaylib’s custom ECS for large-scale projects.
 
 - **[Box2D](https://github.com/erincatto/box2d)** – A proven 2D rigid-body physics engine.  
   Ideal for replacing the simple AABB system with proper physics simulation (forces, impulses, collisions, joints).
