@@ -1,27 +1,21 @@
 # MiniEngineRaylib
 
-**MiniEngineRaylib** is a lightweight, modular **2D game engine** written in **C++**, built on top of [Raylib](https://www.raylib.com/).  
+**MiniEngineRaylib** is a lightweight game engine written in **C++**, built on top of [Raylib](https://www.raylib.com/).  
 It is designed to be simple, minimal, and educational — ideal for learning engine architecture or building small games.
 
 ## Features
 
 - **Entity–Component System (ECS)** Lightweight architecture with easy-to-use entity API and registry management.
 
-- **2D Rendering System** Batched sprite rendering, camera system, layering, and smooth camera follow.
-
 - **Scene Serialization** Save and load scenes to JSON (`scene.json`) with entities and components, powered by [nlohmann/json](https://github.com/nlohmann/json).
 
-- **Input System** Bind digital axes and actions (e.g., “MoveX”, “MoveY”, “Quit”, etc.).
-
-- **Physics 2D** Simple AABB collision system with velocity integration.
+- **Input System** Bind digital axes and actions (e.g., "MoveX", "MoveY", "Quit", etc.).
 
 - **Time Management** Frame delta and fixed-step support for consistent physics updates.
 
 - **Camera System** Follow targets smoothly and manage multiple viewports.
 
 - **Asset Management** Texture loading with reference counting and automatic cleanup.
-
-- **Animation System** *(basic)* Frame-based sprite animations via SpriteSheet and AnimationPlayer components.
 
 ## Getting Started
 
@@ -64,92 +58,6 @@ The executable is built into ```out/build/<preset>/bin/```. Asset files are auto
 
 ```bash
 ./out/build/x64-debug/bin/sandbox.exe
-```
-
-## Example Game Skeleton
-
-A typical game uses the `GameApp` base class plus the scene system (`GameScene` + `SceneManager`).
-
-```cpp
-#include "GameApp.hpp"
-#include "GameScene.hpp"
-#include "SceneManager.hpp"
-#include "Scene.hpp"
-#include "Render2D.hpp"
-#include "Time.hpp"
-#include "Input.hpp"
-#include "CameraFollow.hpp"
-#include "Physics2D.hpp"
-
-// Simple example scene
-class MainScene : public me::scene::GameScene {
-public:
-    const char* GetName() const override { return "Main"; }
-    const char* GetFile() const override { return "main.json"; } // auto-created under /scenes
-
-    void OnEnter() override {
-        // Called after main.json is loaded.
-        // You can spawn entities here or rely on JSON contents.
-    }
-
-    void OnUpdate(float dt) override {
-        // Per-frame scene logic goes here
-        // e.g. if (me::input::ActionPressed("QuitGame")) { ... }
-    }
-};
-
-class MyGame : public me::GameApp {
-    MainScene mainScene;
-
-    float physAcc = 0.0f;
-    static constexpr float kPhysStep = 1.0f / 120.0f;
-
-public:
-    void OnStart() override {
-        using me::input::Key;
-
-        // Basic input bindings
-        me::input::BindAction("Quit", Key::Escape);
-
-        // Register scenes
-        me::scene::manager::Register(&mainScene);
-
-        // Start in Main scene (will load /scenes/main.json)
-        me::scene::manager::Load("Main");
-    }
-
-    void OnUpdate(float dt) override {
-        // Global quit
-        if (me::input::ActionPressed("Quit"))
-            me::RequestQuit();
-
-        // Scene-specific logic
-        me::scene::manager::Update(dt);
-
-        // Shared systems
-        me::physics2d::StepFixed(dt, kPhysStep, physAcc);
-        me::camera::Update(dt);
-    }
-
-    void OnRender() override {
-        me::render2d::RenderWorld();
-    }
-
-    void OnShutdown() override {
-        me::assets::ReleaseAll();
-    }
-};
-
-int main() {
-    MyGame game;
-    me::Run(game,
-     "MiniEngineRaylib Example",
-      1280, // width
-      720,  // height
-      false, // vsync
-      60    // target fps
-    );
-}
 ```
 
 ## Future Improvements & Roadmap

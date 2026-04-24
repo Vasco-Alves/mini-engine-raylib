@@ -2,11 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.5.0] - 2026-02-01
+## [0.5.0] - 2026-04-25
+Mini Engine Raylib went through a huge code refactor and overhaul.
+
+## [0.4.1] - 2026-02-01
 ### 3D Transformation
 - **Core Pivot:** The engine is now natively 3D.
 - **Transform:** Replaced `Transform2D` with `Transform`. Now supports `x, y, z`, Euler rotation (`rotX, rotY, rotZ`), and 3D scale.
-- **Rendering:** Removed `Render2D` and `SpriteRenderer`. Added `Render3D` and `MeshRenderer` (supporting `Cube`, `Sphere`, and `Plane` primitives).
+- **Rendering:** Removed `Render2D` and `SpriteRenderer`. Added `Render3D` and `MeshRendererComponent` (supporting `Cube`, `Sphere`, and `Plane` primitives).
 
 ### Added
 - **Camera System:** Added `me::camera::UpdateFreeFly()` for decoupled FPS-style camera movement (WASD moves flatly, Mouse looks freely).

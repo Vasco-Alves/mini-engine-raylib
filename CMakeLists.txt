@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(
     "mini-engine-raylib"
-    VERSION 0.4.1
+    VERSION 0.5.0
     DESCRIPTION "A simple game engine built with Raylib"
     LANGUAGES CXX
 )
@@ -18,6 +18,10 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+# Add ECS library
+add_subdirectory(vendor/mini-ecs)
+
+# 4. Build Engine & Sandbox
 add_subdirectory(engine)
 
 # Running "MiniEngine" directly (Dev Mode)

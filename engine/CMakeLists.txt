@@ -2,55 +2,41 @@
 find_package(raylib CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
-# 2. Define Source Files 
+# 2. Define Source Files (Lowercase and GameApp.cpp removed)
 set(SOURCES
-    "src/Assets.cpp"
-    "src/Audio.cpp"
-    "src/CameraSystem.cpp"
-    "src/Engine.cpp"
-    "src/Entity.cpp"
-    "src/GameApp.cpp"
-    "src/Input.cpp"
-    "src/InputDefaults.cpp"
-    "src/LifetimeSystem.cpp"
-    "src/Registry.cpp"
-    "src/Render3D.cpp"
-    "src/Scene.cpp"
-    "src/SceneManager.cpp"
-    "src/Time.cpp"
+    "src/assets/assets.cpp"
+    "src/audio/audio.cpp"
+    "src/core/engine.cpp"
+    "src/core/time.cpp"
+    "src/input/input.cpp"
+    "src/input/input_defaults.cpp"
+    "src/render/renderer.cpp"
+    "src/render/camera_system.cpp"
+    "src/scene/scene.cpp"
+    "src/scene/scene_manager.cpp"
 )
 
-# 3. Define Header Files
-set(HEADERS
-    "include/Assets.hpp"
-    "include/Audio.hpp"
-    "include/CameraSystem.hpp"
-    "include/Color.hpp"
-    "include/Components.hpp"
-    "include/Engine.hpp"
-    "include/Entity.hpp"
-    "include/GameApp.hpp"
-    "include/GameScene.hpp"
-    "include/Input.hpp"
-    "include/InputDefaults.hpp"
-    "include/LifetimeSystem.hpp"
-    "include/Math.hpp"
-    "include/Pool.hpp"
-    "include/Registry.hpp"
-    "include/Render3D.hpp"
-    "include/Scene.hpp"
-    "include/SceneManager.hpp"
-    "include/Time.hpp"
+# 3. Create the Library
+add_library(engine STATIC ${SOURCES})
+
+# 4. Setup Include Directories
+target_include_directories(engine PUBLIC 
+    "include" # Exposes the namespace folder so users can do: #include <mini-engine-raylib/core/engine.hpp>
+    
+    # --- SHORTCUT DIRECTORIES ---
+    "include/mini-engine-raylib"
+    "include/mini-engine-raylib/assets"
+    "include/mini-engine-raylib/audio"
+    "include/mini-engine-raylib/core"
+    "include/mini-engine-raylib/ecs"
+    "include/mini-engine-raylib/input"
+    "include/mini-engine-raylib/render"
+    "include/mini-engine-raylib/scene"
+    "include/mini-engine-raylib/systems"
 )
 
-# 4. Create the Library
-add_library(engine STATIC ${SOURCES} ${HEADERS})
-
-# 5. Setup Include Directories
-target_include_directories(engine PUBLIC "include")
-
-# 6. Link Dependencies
+# 5. Link Dependencies
 target_link_libraries(engine 
     PRIVATE raylib 
-    PUBLIC nlohmann_json::nlohmann_json
+    PUBLIC nlohmann_json::nlohmann_json mini-ecs
 )
