@@ -25,4 +25,5 @@ namespace me::assets {
 
 	// Query texture size in pixels (0,0 if invalid)
 	me::math::Vec2 texture_size(TextureId id);
-}
+
+} // namespace me::assets

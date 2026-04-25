@@ -13,7 +13,6 @@ set(SOURCES
     "src/render/renderer.cpp"
     "src/render/camera_system.cpp"
     "src/scene/scene.cpp"
-    "src/scene/scene_manager.cpp"
 )
 
 # 3. Create the Library

@@ -1,12 +1,11 @@
-#include "mini-engine-raylib/core/engine.hpp"
-
-// Assuming these exist and we will eventually update them to snake_case too
-#include "input/Input.hpp" 
+#include "core/engine.hpp"
+#include "input/input.hpp" 
 #include "mini-engine-raylib/input/input_defaults.hpp"
 #include "audio/Audio.hpp"
 #include "assets/Assets.hpp"
 
 #include <mini-ecs/registry.hpp>
+
 #include <raylib.h>
 #include <memory>
 
@@ -51,7 +50,7 @@ namespace me {
 	void run(Application& app, const AppConfig& config) {
 		if (!init(config)) return;
 
-		app.on_start(config.width, config.height);
+		app.on_start();
 
 		int last_width = s_State.config.width;
 		int last_height = s_State.config.height;
@@ -60,16 +59,8 @@ namespace me {
 		int frames = 0;
 
 		while (s_State.running && !WindowShouldClose()) {
-			float dt = GetFrameTime();
-
-			accumulator += dt;
-			frames++;
-			if (accumulator >= 1.0) {
-				std::string title = s_State.config.title + " | FPS: " + std::to_string(frames);
-				SetWindowTitle(title.c_str());
-				frames = 0;
-				accumulator = 0.0;
-			}
+			std::string title = s_State.config.title + " | FPS: " + std::to_string(GetFPS());
+			SetWindowTitle(title.c_str());
 
 			if (IsWindowResized()) {
 				int current_width = GetScreenWidth();
@@ -79,12 +70,15 @@ namespace me {
 				last_height = current_height;
 			}
 
-			// -- Update Subsystems & Game (UPDATED TO SNAKE_CASE) --
+			// -- Update Subsystems & Game --
+			float dt = GetFrameTime();
+
 			me::input::poll();
 			app.on_update(dt);
 
 			BeginDrawing();
-			ClearBackground({ 25, 25, 30, 255 });
+			//ClearBackground({ 25, 25, 30, 255 });
+			ClearBackground({ 0, 0, 0, 0});
 			app.on_render();
 			EndDrawing();
 		}
@@ -105,6 +99,14 @@ namespace me {
 
 	void close_application() {
 		s_State.running = false;
+	}
+
+	int get_window_width() {
+		return GetScreenWidth();
+	}
+
+	int get_window_height() {
+		return GetScreenHeight();
 	}
 
 } // namespace me

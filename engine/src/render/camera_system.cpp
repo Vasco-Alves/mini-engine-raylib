@@ -4,6 +4,8 @@
 #include "mini-engine-raylib/input/input.hpp"
 #include "mini-engine-raylib/core/math.hpp"
 
+#include <mini-ecs/registry.hpp>
+
 #include <cmath>
 #include <algorithm>
 
@@ -18,7 +20,7 @@ namespace me::camera {
 
 		// Iterate sparse set
 		for (size_t i = 0; i < cam_pool.size(); ++i) {
-			me::EntityId e = cam_pool.entity_map[i];
+			me::entity::entity_id e = cam_pool.entity_map[i];
 			auto& cam = cam_pool.components[i];
 
 			if (!cam.active) continue;
@@ -62,7 +64,7 @@ namespace me::camera {
 		}
 	}
 
-	void look_at(me::EntityId cam_ent, float target_x, float target_y, float target_z) {
+	void look_at(me::entity::entity_id cam_ent, float target_x, float target_y, float target_z) {
 		auto& reg = me::get_registry();
 		auto* t = reg.try_get_component<me::components::TransformComponent>(cam_ent);
 

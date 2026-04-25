@@ -8,5 +8,5 @@ namespace me::camera {
 	void update_free_fly(float dt);
 
 	// Instantly rotates the camera entity to look at the target (x,y,z)
-	void look_at(me::EntityId cam_ent, float x, float y, float z);
+	void look_at(me::entity::entity_id cam_ent, float x, float y, float z);
 }

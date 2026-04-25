@@ -1,12 +1,9 @@
 #pragma once
 
 #include "mini-engine-raylib/render/color.hpp"
+#include "mini-engine-raylib/assets/assets.hpp"
 
 #include <mini-ecs/entity.hpp>
-
-namespace me {
-	using EntityId = me::entity::entity_id;
-}
 
 namespace me::components {
 
@@ -25,10 +22,22 @@ namespace me::components {
 		bool active = true;
 	};
 
+	struct Camera2DComponent {
+		float offset_x = 0.0f, offset_y = 0.0f; // Screen center offset
+		float rotation = 0.0f;
+		float zoom = 1.0f;
+		bool active = true;
+	};
+
 	struct MeshRendererComponent {
 		enum Type { Cube, Sphere, Plane } type = Cube;
 		me::Color color = me::Color::white;
 		bool wireframe = false;
+	};
+
+	struct SpriteComponent {
+		me::assets::TextureId texture{};
+		me::Color tint = me::Color::white;
 	};
 
 } // namespace me::components

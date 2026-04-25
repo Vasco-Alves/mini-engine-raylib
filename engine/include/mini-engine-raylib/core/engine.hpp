@@ -8,9 +8,7 @@ namespace me {
 
 	class Registry;
 
-	// The main entry point. 
-	// Initializes Modulus, creates the Window, runs the Loop, and cleans up.
-	// Blocks until the game is closed.
+	bool init(const AppConfig& config);
 	void run(Application& app, const AppConfig& config = {});
 
 	// Global Accessors
@@ -18,5 +16,8 @@ namespace me {
 
 	// Request the engine to stop (e.g. from a Quit button)
 	void close_application();
+
+	int get_window_width();
+	int get_window_height();
 
 }

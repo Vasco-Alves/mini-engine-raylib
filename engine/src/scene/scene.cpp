@@ -1,114 +1,131 @@
 #include "mini-engine-raylib/scene/scene.hpp"
+#include "mini-engine-raylib/core/engine.hpp"
 #include "mini-engine-raylib/ecs/components.hpp"
-#include "mini-engine-raylib/core/engine.hpp"   
 
-#include <raylib.h>
+#include <mini-ecs/registry.hpp>
+
 #include <nlohmann/json.hpp>
-
+#include <unordered_map>
 #include <filesystem>
 #include <fstream>
-#include <string>
-#include <vector>
+#include <iostream>
 
 using json = nlohmann::ordered_json;
 namespace fs = std::filesystem;
 
-namespace me::scene {
+namespace me {
 
-	static json to_json(const me::components::TransformComponent& t) {
-		return json{
-			{"x", t.x}, {"y", t.y}, {"z", t.z},
-			{"rot_x", t.rot_x}, {"rot_y", t.rot_y}, {"rot_z", t.rot_z},
-			{"sx", t.sx}, {"sy", t.sy}, {"sz", t.sz}
-		};
-	}
+	// ===================================================================
+	// SCENE MANAGER IMPLEMENTATION
+	// ===================================================================
+	namespace scene_manager {
 
-	static void from_json(const json& j, me::components::TransformComponent& t) {
-		t.x = j.value("x", 0.0f); t.y = j.value("y", 0.0f); t.z = j.value("z", 0.0f);
-		t.rot_x = j.value("rot_x", 0.0f); t.rot_y = j.value("rot_y", 0.0f); t.rot_z = j.value("rot_z", 0.0f);
-		t.sx = j.value("sx", 1.0f); t.sy = j.value("sy", 1.0f); t.sz = j.value("sz", 1.0f);
-	}
+		namespace {
+			std::unordered_map<std::string, Scene*> s_scenes;
+			std::string s_current_name;
+		}
 
-	static json to_json(const me::components::CameraComponent& c) {
-		return json{
-			{"target", {c.target_x, c.target_y, c.target_z}},
-			{"up",     {c.up_x, c.up_y, c.up_z}},
-			{"fov",    c.fov},
-			{"proj",   c.projection},
-			{"active", c.active}
-		};
-	}
+		void register_scene(Scene* scene) {
+			if (!scene) return;
+			std::string name = scene->get_name();
+			s_scenes[name] = scene;
 
-	static void from_json(const json& j, me::components::CameraComponent& c) {
-		if (j.contains("target")) { c.target_x = j["target"][0]; c.target_y = j["target"][1]; c.target_z = j["target"][2]; }
-		if (j.contains("up")) { c.up_x = j["up"][0]; c.up_y = j["up"][1]; c.up_z = j["up"][2]; }
-		c.fov = j.value("fov", 60.0f);
-		c.projection = j.value("proj", 0);
-		c.active = j.value("active", false);
-	}
+			// If it has a file, ensure it exists
+			const char* file = scene->get_file();
+			if (file && *file) {
+				fs::path scene_folder = fs::current_path() / "scenes";
+				fs::create_directories(scene_folder);
+				fs::path full_path = scene_folder / file;
+				if (!fs::exists(full_path)) {
+					std::ofstream out(full_path, std::ios::binary);
+					if (out) out << R"({ "entities": [] })";
+				}
+			}
 
-	static json to_json(const me::components::MeshRendererComponent& m) {
-		return json{
-			{"type", (int)m.type},
-			{"color", { m.color.r, m.color.g, m.color.b, m.color.a }},
-			{"wire", m.wireframe}
-		};
-	}
+			scene->on_register();
+		}
 
-	static void from_json(const json& j, me::components::MeshRendererComponent& m) {
-		m.type = (me::components::MeshRendererComponent::Type)j.value("type", 0);
-		m.wireframe = j.value("wire", false);
-		if (j.contains("color")) {
-			m.color.r = j["color"][0]; m.color.g = j["color"][1];
-			m.color.b = j["color"][2]; m.color.a = j["color"][3];
+		void load(const std::string& name) {
+			if (!s_current_name.empty() && s_scenes[s_current_name]) {
+				s_scenes[s_current_name]->on_exit();
+			}
+
+			if (s_scenes.find(name) == s_scenes.end()) {
+				std::cerr << "Scene not registered: " << name << "\n";
+				return;
+			}
+
+			Scene* scene = s_scenes[name];
+			scene->load_from_file(); // Load JSON if it has one
+
+			s_current_name = name;
+			scene->on_enter();
+		}
+
+		void update(float dt) {
+			if (!s_current_name.empty() && s_scenes[s_current_name])
+				s_scenes[s_current_name]->on_update(dt);
+		}
+
+		void exit() {
+			if (!s_current_name.empty() && s_scenes[s_current_name])
+				s_scenes[s_current_name]->on_exit();
+		}
+
+		void resize(int width, int height) {
+			if (!s_current_name.empty() && s_scenes[s_current_name])
+				s_scenes[s_current_name]->on_resize(width, height);
+		}
+
+		const std::string& current_name() {
+			return s_current_name;
+		}
+
+		Scene* current() {
+			return s_scenes.count(s_current_name) ? s_scenes[s_current_name] : nullptr;
 		}
 	}
 
-	bool save(const char* filename) {
+	// ===================================================================
+	// SCENE SERIALIZATION (JSON SAVE/LOAD)
+	// ===================================================================
+
+	bool Scene::save_to_file() const {
+		const char* filename = get_file();
 		if (!filename || !*filename) return false;
 
-		json root;
-		root["entities"] = json::array();
-
+		json root; root["entities"] = json::array();
 		auto& reg = me::get_registry();
-
 		auto& transforms = reg.view<me::components::TransformComponent>();
 
 		for (size_t i = 0; i < transforms.size(); ++i) {
-			me::EntityId e = transforms.entity_map[i];
+			me::entity::entity_id e = transforms.entity_map[i];
 			auto& t = transforms.components[i];
-
 			if (!reg.is_alive(e)) continue;
 
 			json je;
 			je["id"] = static_cast<uint32_t>(e);
-			je["name"] = "Entity";
 
 			json comps = json::object();
-			comps["Transform"] = to_json(t);
+			comps["Transform"] = json{ {"x", t.x}, {"y", t.y}, {"z", t.z}, {"rot_x", t.rot_x}, {"rot_y", t.rot_y}, {"rot_z", t.rot_z}, {"sx", t.sx}, {"sy", t.sy}, {"sz", t.sz} };
 
-			if (auto* c = reg.try_get_component<me::components::MeshRendererComponent>(e)) {
-				comps["MeshRendererComponent"] = to_json(*c);
-			}
-			if (auto* c = reg.try_get_component<me::components::CameraComponent>(e)) {
-				comps["Camera"] = to_json(*c);
+			if (auto* c = reg.try_get_component<me::components::Camera2DComponent>(e)) {
+				comps["Camera2D"] = json{ {"offset_x", c->offset_x}, {"offset_y", c->offset_y}, {"zoom", c->zoom}, {"rotation", c->rotation} };
 			}
 
 			je["components"] = std::move(comps);
 			root["entities"].push_back(std::move(je));
 		}
 
-		fs::path sceneDir = fs::current_path() / "scenes";
-		fs::create_directories(sceneDir);
-		fs::path fullPath = sceneDir / filename;
-
+		fs::path fullPath = fs::current_path() / "scenes" / filename;
 		std::ofstream ofs(fullPath, std::ios::binary);
 		if (!ofs) return false;
 		ofs << root.dump(2);
 		return true;
 	}
 
-	bool load(const char* filename) {
+	bool Scene::load_from_file() const {
+		const char* filename = get_file();
 		if (!filename || !*filename) return false;
 
 		fs::path fullPath = fs::current_path() / "scenes" / filename;
@@ -118,38 +135,25 @@ namespace me::scene {
 		json root;
 		try { ifs >> root; } catch (...) { return false; }
 
-		// NOTE: Make sure to implement me::reset_registry() or similar in your engine code
-		// if it was previously me::ResetRegistry().
-		// me::reset_registry(); 
 		auto& reg = me::get_registry();
-
 		if (!root.contains("entities") || !root["entities"].is_array()) return true;
 
 		for (const auto& je : root["entities"]) {
-			std::string name = je.value("name", "Entity");
-			me::Entity e = reg.create_entity(name);
-
+			me::Entity e = reg.create_entity("Entity");
 			if (!je.contains("components")) continue;
 			const auto& comps = je["components"];
 
 			if (comps.contains("Transform")) {
-				me::components::TransformComponent t{};
-				from_json(comps["Transform"], t);
-				reg.add_component(e, t);
+				auto& j = comps["Transform"];
+				reg.add_component(e, me::components::TransformComponent{ j.value("x", 0.f), j.value("y", 0.f), j.value("z", 0.f), j.value("rot_x", 0.f), j.value("rot_y", 0.f), j.value("rot_z", 0.f), j.value("sx", 1.f), j.value("sy", 1.f), j.value("sz", 1.f) });
 			}
 
-			if (comps.contains("MeshRendererComponent")) {
-				me::components::MeshRendererComponent m{};
-				from_json(comps["MeshRendererComponent"], m);
-				reg.add_component(e, m);
-			}
-
-			if (comps.contains("Camera")) {
-				me::components::CameraComponent c{};
-				from_json(comps["Camera"], c);
-				reg.add_component(e, c);
+			if (comps.contains("Camera2D")) {
+				auto& j = comps["Camera2D"];
+				reg.add_component(e, me::components::Camera2DComponent{ j.value("offset_x", 0.f), j.value("offset_y", 0.f), j.value("rotation", 0.f), j.value("zoom", 1.f), true });
 			}
 		}
 		return true;
 	}
-}
+
+} // namespace me

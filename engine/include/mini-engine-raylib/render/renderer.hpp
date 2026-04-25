@@ -6,5 +6,6 @@ namespace me::render {
 
 	void clear_world(me::Color color);
 	void render_world();
+	void render_2d();
 
-}
+} // namespace me::render

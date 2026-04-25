@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1] - 2026-04-25
+### Added
+- **Scene Systems:** `me::Scene` now natively manages user-defined ECS systems. Added the `add_system<T>(Args&&...)` template method to easily instantiate and attach gameplay systems to a specific scene.
+
+### Changed
+- **System Architecture:** Refactored `me::System` to align with a purer ECS philosophy. Systems no longer hold a stateful reference to the `Registry` in their constructor.
+- **System API:** The `on_update` signature was updated to receive the registry dynamically: `virtual void on_update(Registry& registry, float dt) = 0`.
+- **Scene Execution:** `me::Scene::on_update(float dt)` now automatically fetches the global registry and iterates through all attached user systems, executing them in the order they were registered.
+
+### Removed
+- **System Render:** Removed `on_render()` from the base `me::System` interface to strictly enforce the engine's pipeline rules (Simulation/Logic runs first, Rendering is handled automatically by the engine at the end of the frame).
+
 ## [0.5.0] - 2026-04-25
 Mini Engine Raylib went through a huge code refactor and overhaul.
 
