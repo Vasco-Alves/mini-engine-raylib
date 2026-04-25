@@ -1,6 +1,6 @@
 #pragma once
 
-#include "mini-engine-raylib/core/Math.hpp" // Consider renaming Math.hpp to math.hpp later
+#include "mini-engine-raylib/core/math.hpp"
 
 #include <string>
 #include <vector>
