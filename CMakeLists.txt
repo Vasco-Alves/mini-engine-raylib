@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 project(
     "mini-engine-raylib"
-    VERSION 0.5.1
+    VERSION 0.6.0
     DESCRIPTION "A simple game engine built with Raylib"
     LANGUAGES CXX
 )
@@ -18,10 +18,14 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-# Add ECS library
+# Add vendor libraries
 add_subdirectory(vendor/mini-ecs)
+add_subdirectory(vendor/lua)
 
-# 4. Build Engine & Sandbox
+include_directories("${CMAKE_CURRENT_SOURCE_DIR}/vendor/lua/src")
+include_directories("${CMAKE_CURRENT_SOURCE_DIR}/vendor/sol3/include")
+
+# Build Engine & Sandbox
 add_subdirectory(engine)
 
 # Running "MiniEngine" directly (Dev Mode)

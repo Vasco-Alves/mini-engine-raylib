@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+# [0.6.0] - 2026-05-07
+### Added
+- **Lua Scripting Support:** Lua can now be used to give costum scripts to an entity.
+
 ## [0.5.1] - 2026-04-25
 ### Added
 - **Scene Systems:** `me::Scene` now natively manages user-defined ECS systems. Added the `add_system<T>(Args&&...)` template method to easily instantiate and attach gameplay systems to a specific scene.

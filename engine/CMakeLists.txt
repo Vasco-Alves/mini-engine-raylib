@@ -13,7 +13,8 @@ set(SOURCES
     "src/render/renderer.cpp"
     "src/render/camera_system.cpp"
     "src/scene/scene.cpp"
-)
+    "src/scripting/script_manager.cpp"
+ "src/systems/script_system.cpp")
 
 # 3. Create the Library
 add_library(engine STATIC ${SOURCES})
@@ -21,6 +22,9 @@ add_library(engine STATIC ${SOURCES})
 # 4. Setup Include Directories
 target_include_directories(engine PUBLIC 
     "include" # Exposes the namespace folder so users can do: #include <mini-engine-raylib/core/engine.hpp>
+
+    "${CMAKE_SOURCE_DIR}/vendor/sol3/include"
+    "${CMAKE_SOURCE_DIR}/vendor/lua/src"
     
     # --- SHORTCUT DIRECTORIES ---
     "include/mini-engine-raylib"
@@ -37,5 +41,5 @@ target_include_directories(engine PUBLIC
 # 5. Link Dependencies
 target_link_libraries(engine 
     PRIVATE raylib 
-    PUBLIC nlohmann_json::nlohmann_json mini-ecs
+    PUBLIC nlohmann_json::nlohmann_json mini-ecs lua
 )
