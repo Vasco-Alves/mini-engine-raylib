@@ -21,7 +21,7 @@ namespace me {
 
 		// Optional JSON file for this scene (returns "" if code-only)
 		virtual const char* get_file() const { return ""; }
-		//virtual me::Color get_clear_color() const { return me::Color{ 20, 20, 20, 255 }; }
+		virtual me::Color get_clear_color() const { return me::Color{ 0, 0, 0, 255 }; }
 
 		template <typename T, typename... Args>
 		void add_system(Args&&... args) {

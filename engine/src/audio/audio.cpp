@@ -144,6 +144,12 @@ namespace me::audio {
 		PlaySound(copy);
 	}
 
+	void stop(SoundId id) {
+		const ::Sound* s = get_native(id);
+		if (!s) return;
+		StopSound(*s);
+	}
+
 	void set_master_volume(float v) {
 		ensure_audio_device();
 		::SetMasterVolume(v < 0.f ? 0.f : (v > 1.f ? 1.f : v));

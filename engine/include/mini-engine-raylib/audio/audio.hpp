@@ -14,6 +14,7 @@ namespace me::audio {
 	void     release(SoundId id);
 
 	void     play(SoundId id, float volume = 1.0f, float pitch = 1.0f);
+	void     stop(SoundId id);
 	void     set_master_volume(float v);    // 0..1
 
 	// --------- Music (streamed, long tracks) ----------
