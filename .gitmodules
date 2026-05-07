@@ -1,3 +1,4 @@
 [submodule "vendor/mini-ecs"]
 	path = vendor/mini-ecs
 	url = https://github.com/Vasco-Alves/mini-ecs.git
+	branch = main
