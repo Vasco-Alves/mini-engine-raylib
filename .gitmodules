@@ -2,3 +2,6 @@
 	path = vendor/mini-ecs
 	url = https://github.com/Vasco-Alves/mini-ecs.git
 	branch = main
+[submodule "vendor/sol3"]
+	path = vendor/sol3
+	url = https://github.com/ThePhD/sol2
