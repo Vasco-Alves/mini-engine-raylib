@@ -2,7 +2,6 @@ project(editor CXX)
 
 # Find all .cpp files in the editor source folder
 file(GLOB_RECURSE EDITOR_SOURCES "src/*.cpp")
-
 add_executable(editor ${EDITOR_SOURCES})
 
 # Tell the editor where its own headers are

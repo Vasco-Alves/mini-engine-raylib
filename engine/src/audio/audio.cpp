@@ -1,12 +1,12 @@
 #include "mini-engine-raylib/audio/audio.hpp"
 
-#include <raylib.h>
-
 #include <unordered_map>
 #include <string>
 #include <cstdint>
 #include <utility>
 #include <filesystem>
+
+#include <raylib.h>
 
 namespace fs = std::filesystem;
 

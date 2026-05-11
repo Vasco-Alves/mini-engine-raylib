@@ -28,14 +28,15 @@ namespace sandbox {
 
 		// 2. Create Floor
 		auto floor = reg.create_entity("Floor");
+		//reg.add_component(floor, me::components::TagComponent{ "Floor" });
 		reg.add_component(floor, me::components::TransformComponent{ 0, 0, 0, 0,0,0, 20, 1, 20 });
-		reg.add_component(floor, me::components::MeshRendererComponent{ me::components::MeshRendererComponent::Plane, me::Color::dark_gray });
+		reg.add_component(floor, me::components::Shape3DComponent{ me::components::Shape3DComponent::Plane, me::Color::dark_gray });
 
 
 		// 3. Create Reference Cube
 		auto cube = reg.create_entity("RefCube");
 		reg.add_component(cube, me::components::TransformComponent{ 0, 2, 0 });
-		reg.add_component(cube, me::components::MeshRendererComponent{ me::components::MeshRendererComponent::Cube, me::Color::red });
+		reg.add_component(cube, me::components::Shape3DComponent{ me::components::Shape3DComponent::Cube, me::Color::red });
 
 		// LUA SCRIPT
 		reg.add_component(cube, me::components::ScriptComponent{ "assets/scripts/rotator.lua" });

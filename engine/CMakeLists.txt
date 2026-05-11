@@ -12,9 +12,11 @@ set(SOURCES
     "src/input/input_defaults.cpp"
     "src/render/renderer.cpp"
     "src/render/camera_system.cpp"
-    "src/scene/scene.cpp"
     "src/scripting/script_manager.cpp"
- "src/systems/script_system.cpp")
+    "src/systems/script_system.cpp"
+    "src/scene/scene_manager.cpp"
+    "src/systems/transform_system.cpp"
+ "src/core/vfs.cpp")
 
 # 3. Create the Library
 add_library(engine STATIC ${SOURCES})

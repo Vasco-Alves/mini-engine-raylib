@@ -1,8 +1,8 @@
 #pragma once
 
-#include "mini-engine-raylib/core/application.hpp"
-
 #include <string>
+
+#include "mini-engine-raylib/core/application.hpp"
 
 namespace me {
 
@@ -14,7 +14,10 @@ namespace me {
 	// Global Accessors
 	Registry& get_registry();
 
-	// Request the engine to stop (e.g. from a Quit button)
+	// --- GAME STATE ---
+	void set_playing(bool playing);
+	bool is_playing();
+
 	void close_application();
 
 	int get_window_width();

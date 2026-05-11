@@ -1,9 +1,9 @@
 #pragma once
 
-#include "mini-engine-raylib/core/math.hpp"
-
 #include <string>
 #include <vector>
+
+#include <raylib.h>
 
 namespace me::input {
 
@@ -69,7 +69,7 @@ namespace me::input {
 	float axis_value(const std::string& axis_name);
 
 	// -------- raw mouse helpers (no bindings required) --------
-	me::math::Vec2 mouse_position();
-	me::math::Vec2 mouse_delta();
-	float          mouse_wheel_delta();
+	Vector2	mouse_position();
+	Vector2	mouse_delta();
+	float	mouse_wheel_delta();
 }

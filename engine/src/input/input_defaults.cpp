@@ -8,15 +8,20 @@ namespace me::input {
 
 		// Strafe (X)
 		bind_digital_axis("MoveX", Key::A, Key::D, 1.0f);
-		bind_digital_axis("MoveX", Key::Left, Key::Right, 1.0f);
+		//bind_digital_axis("MoveX", Key::Left, Key::Right, 1.0f);
 
 		// Forward/Back (Z)
 		bind_digital_axis("MoveZ", Key::W, Key::S, 1.0f);
-		bind_digital_axis("MoveZ", Key::Up, Key::Down, 1.0f);
+		//bind_digital_axis("MoveZ", Key::Up, Key::Down, 1.0f);
 
 		// --- Look: Mouse ---
 		bind_axis("LookX", Axis::MouseX, 0.1f);
 		bind_axis("LookY", Axis::MouseY, 0.1f);
+
+		// --- Buttons: Mouse ---
+		bind_action("MouseRight", MouseButton::Right);
+		bind_action("MouseMiddle", MouseButton::Middle);
+		bind_action("MouseLeft", MouseButton::Left);
 
 		// --- Configuration (Deadzone & Clamping) ---
 

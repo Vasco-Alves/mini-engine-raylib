@@ -1,24 +1,27 @@
-#include "mini-engine-raylib/core/engine.hpp"
 #include "mini-engine-raylib/scripting/script_manager.hpp"
+
+#include <iostream>
+
+#include "mini-engine-raylib/core/engine.hpp"
 #include "mini-engine-raylib/ecs/components.hpp"
 
 #include <mini-ecs/registry.hpp>
-
-#include <iostream>
+#include <mini-ecs/entity.hpp>     
 
 namespace me::scripting {
 
 	namespace {
-		// Our single, global Lua brain. Hidden from the rest of the engine.
-		sol::state* s_State = nullptr;
+		// Global Lua brain. Hidden from the rest of the engine.
+		std::unique_ptr<sol::state> s_State = nullptr;
 	}
 
 	void init() {
-		if (s_State) return;
+		if (s_State)
+			return;
 
-		s_State = new sol::state();
+		s_State = std::make_unique<sol::state>();
 
-		// Open standard Lua libraries (gives scripts access to math, string manipulation, etc.)
+		// Open standard Lua libraries
 		s_State->open_libraries(sol::lib::base, sol::lib::math, sol::lib::string);
 
 		// Automatically teach Lua about our C++ engine
@@ -26,49 +29,52 @@ namespace me::scripting {
 	}
 
 	void shutdown() {
-		if (s_State) {
-			delete s_State;
-			s_State = nullptr;
-		}
+		s_State.reset();
 	}
 
 	void bind_engine() {
 		if (!s_State) return;
 
-		// 1. Bind the Transform Component
-		// new_usertype maps a C++ struct to a Lua table
-		s_State->new_usertype<me::components::TransformComponent>("TransformComponent",
-			// Allow Lua to create new Transforms with default or specific values
-			sol::constructors<me::components::TransformComponent(), me::components::TransformComponent(float, float, float)>(),
-
-			// Map the C++ variables to Lua variable names
-			"x", &me::components::TransformComponent::x,
-			"y", &me::components::TransformComponent::y,
-			"z", &me::components::TransformComponent::z,
-			"rotx", &me::components::TransformComponent::rot_x,
-			"roty", &me::components::TransformComponent::rot_y,
-			"rotz", &me::components::TransformComponent::rot_z,
-			"sx", &me::components::TransformComponent::sx,
-			"sy", &me::components::TransformComponent::sy,
-			"sz", &me::components::TransformComponent::sz
+		// ===================================================================
+		// 1. MATH BINDINGS
+		// ===================================================================
+		s_State->new_usertype<Vector3>("Vector3",
+			sol::constructors<Vector3(), Vector3(float, float, float)>(),
+			"x", &Vector3::x,
+			"y", &Vector3::y,
+			"z", &Vector3::z
 		);
 
-		// 2. Bind the Registry
-		// We use sol::no_constructor because Lua should never create a Registry itself,
-		// it should only interact with the global one provided by the engine.
-		s_State->new_usertype<me::Registry>("Registry",
-			sol::no_constructor,
-			"get_transform", [](me::Registry& reg, uint32_t entityId) -> me::components::TransformComponent* {
-				return reg.try_get_component<me::components::TransformComponent>(entityId);
+		// ===================================================================
+		// 2. COMPONENT BINDINGS
+		// ===================================================================
+		s_State->new_usertype<me::components::TransformComponent>("TransformComponent",
+			// Allow Lua to create new Transforms
+			sol::constructors<me::components::TransformComponent()>(),
+
+			// Map the C++ Vector3 structs to Lua!
+			"position", &me::components::TransformComponent::position,
+			"rotation", &me::components::TransformComponent::rotation,
+			"scale", &me::components::TransformComponent::scale
+		);
+
+		// ===================================================================
+		// 3. ENTITY BINDINGS (The Object-Oriented Upgrade!)
+		// ===================================================================
+		s_State->new_usertype<me::Entity>("Entity",
+			sol::no_constructor, // Lua scripts receive entities from the Engine, they don't spawn raw ones.
+
+			// Let Lua check if the entity is alive
+			"is_valid", &me::Entity::is_valid,
+
+			// Let Lua destroy the entity
+			"destroy", &me::Entity::destroy,
+
+			// Let Lua grab the transform using the clean wrapper method
+			"get_transform", [](me::Entity& e) -> me::components::TransformComponent* {
+				return e.try_get_component<me::components::TransformComponent>();
 			}
 		);
-
-		// 3. Bind a global function to fetch the registry
-		s_State->set_function("get_registry", []() -> me::Registry& {
-			return me::get_registry();
-			});
-
-		// TODO: bind me::math::Vec2, me::Color, etc.
 	}
 
 	sol::state& get_state() {

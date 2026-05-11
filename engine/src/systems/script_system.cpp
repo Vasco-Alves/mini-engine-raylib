@@ -1,11 +1,12 @@
-#include "core/engine.hpp"
-#include "systems/script_system.hpp"
-#include "ecs/script_component.hpp"
-#include "scripting/script_manager.hpp"
-
-#include <mini-ecs/registry.hpp>
+#include "mini-engine-raylib/systems/script_system.hpp"
 
 #include <iostream>
+
+#include "mini-engine-raylib/core/engine.hpp"
+#include "mini-engine-raylib/ecs/script_component.hpp"
+#include "mini-engine-raylib/scripting/script_manager.hpp"
+
+#include <mini-ecs/registry.hpp>
 
 namespace me::systems {
 
@@ -28,11 +29,16 @@ namespace me::systems {
 					// Load the script into this specific environment
 					lua.script_file(script.path, script.env);
 
-					// Call start() if it exists
+					// Call start immediately
 					sol::protected_function start_fn = script.env["start"];
 					if (start_fn.valid()) {
 						start_fn(e);
 					}
+
+					// CACHE THE UPDATE FUNCTION HERE
+					// This saves us from doing a string lookup 60 times a second!
+					script.update_fn = script.env["update"];
+
 				} catch (const sol::error& err) {
 					std::cerr << "[Lua Error] Failed to load " << script.path << "\n" << err.what() << "\n";
 				}
@@ -40,9 +46,11 @@ namespace me::systems {
 			}
 
 			// 2. Update (Run Every Frame)
-			sol::protected_function update_fn = script.env["update"];
-			if (update_fn.valid()) {
-				auto result = update_fn(e, dt);
+			// Notice we are now using script.update_fn instead of script.env["update"]!
+			if (script.update_fn.valid()) {
+				auto result = script.update_fn(e, dt);
+
+				// Safely catch any runtime errors inside the Lua script
 				if (!result.valid()) {
 					sol::error err = result;
 					std::cerr << "[Lua Error] " << err.what() << "\n";

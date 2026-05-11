@@ -2,7 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
-# [0.6.0] - 2026-05-07
+## [0.7.1] - 2026-05-12
+Major upgrades to the Editor UX, Asset Management, and Project Workflow, transitioning the engine into a true multi-project software tool.
+
+### Project Management & VFS
+- **Project Hub:** Decoupled game data from the CMake build folder. The engine now boots to a Hub that allows creating or loading Unity-style project directories (assets/scenes, assets/models, etc.) safely on the user's hard drive.
+- **Native OS Dialogs:** Integrated portable-file-dialogs using a clean wrapper pattern (to prevent windows.h macro collisions with Raylib) for native OS folder browsing right from the Hub.
+- **Virtual File System (VFS):** Built a custom me::vfs subsystem. The engine now seamlessly maps virtual prefixes (engine:// for editor UI, game:// for user projects) to absolute physical paths, completely isolating internal engine assets from user game data.
+
+### Asset Pipeline & Components
+- **3D Asset Manager:** Expanded the Asset Manager to natively support loading and caching .glb and .obj files into Raylib Model structs. Implemented reference counting to share memory across identical instantiated models and properly unload them on engine shutdown.
+- **Component Symmetry Refactor:** Renamed rendering components to clearly separate procedural math shapes from disk-loaded assets: Shape2DComponent, Shape3DComponent, Sprite2DComponent, and Model3DComponent.
+- **Inspector Blindspot Fixed:** Upgraded the ImGui Inspector to dynamically recognize and edit properties for the newly added procedural shapes and 3D models.
+
+### Editor Features & UX
+- **Play / Stop Mode:** Implemented a non-destructive live-testing workflow. Clicking "Play" saves a pristine .temp_play.json snapshot and allows Lua scripts to manipulate the ECS. Clicking "Stop" freezes time and instantly restores the original pre-play ECS state.
+- **Content Browser Panel:** Built an interactive, grid-based file explorer. Features smart color-coding based on file extensions and double-click interactions (double-clicking a .glb automatically spawns it at the origin; double-clicking a .json instantly loads the level).
+- **Panel System Architecture:** Eliminated the "God Function" anti-pattern in on_render(). Extracted the ImGui UI into standalone, isolated classes (SceneHierarchyPanel, ContentBrowserPanel) that communicate with the core Editor App via std::function callbacks.
+- **Professional Theming: O**verhauled the raw ImGui default style with a customized, rounded dark theme featuring custom UI accents and layout saving/loading via the Menu Bar.
+- **Safe Scene Creation:** Replaced immediate scene wipes with a blocking ImGui Popup Modal for creating new scenes, ensuring files are properly named and automatically saved into the VFS before clearing the active world.
+
+## [0.7.0] - 2026-05-10
+Huge scope change. Mini Engine Raylib is now not an engine as a library, but its own engine executable with a GUI editor.
+
+### Architecture & Scope
+- **Standalone Editor:** Replaced the C++ Sandbox approach with a dedicated `EditorApp`. The engine is now driven by a GUI layer acting as a toolset over the core logic.
+- **Data-Driven Scenes:** Completely removed C++ `Scene` class inheritance (e.g., `TestScene`). Implemented a purely functional `scene_manager` that constructs levels dynamically from JSON files directly into the ECS.
+- **Engine Loop Split:** Moved core system updates (like `script_update`) directly into the `engine.cpp` main loop, while leaving rendering logic flexible for the application/editor to control.
+
+### Editor Features
+- **ImGui Viewport:** The game now renders into a dynamically resizing `RenderTexture2D` embedded within a Dear ImGui "Scene View" window, rather than full-screen.
+- **Hierarchy & Inspector:** Added UI windows to list all ECS entities and live-edit their internal memory (Position, Rotation, Scale) using ImGui drag sliders.
+- **Decoupled Editor Camera:** Extracted the free-fly camera out of the game's ECS. The Editor now uses its own private components, ensuring "Save Scene" doesn't write editor tools into the game data.
+- **Input Routing:** Game inputs are intelligently blocked when ImGui has focus. The Editor Camera is activated (and the mouse cursor locked/hidden) only while holding Right-Click over the Scene View.
+- **Main Menu Bar:** Added File menu options for "New Scene", "Save Scene", and "Load Default Scene", with auto-population of default primitives on start.
+
+### Engine & ECS
+- **Tag Component:** Added `me::components::TagComponent` to give entities human-readable names in the UI.
+- **Serialization Expansion:** Expanded JSON `save()` and `load()` to support `TagComponent`, `ScriptComponent`, and `MeshRendererComponent` (resolving narrowing cast issues with Raylib colors).
+- **Script Caching:** Optimized the `ScriptSystem` to cache Lua `update` function pointers upon initialization, preventing severe performance drops from string-based lookups every frame.
+- **Memory Safety:** Transitioned the Lua `sol::state` manager from raw pointers to `std::unique_ptr` to guarantee clean destruction.
+
+### Dependency Management
+- **ImGui Vendoring:** Dropped `vcpkg` for ImGui. Switched to a manual vendor approach (`vendor/imgui`) alongside `rlImGui` to guarantee internal header (`imconfig.h`) compatibility.
+
+## [0.6.0] - 2026-05-07
 ### Added
 - **Lua Scripting Support:** Lua can now be used to give costum scripts to an entity.
 
