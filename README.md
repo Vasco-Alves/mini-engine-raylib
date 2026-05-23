@@ -29,7 +29,7 @@ Originally built as a lightweight wrapper over [Raylib](https://www.raylib.com/)
 This project uses Git submodules for core engine components. You **must** clone it recursively to fetch all the required source code.
 
 ```bash
-git clone --recursive [https://github.com/Vasco-Alves/mini-engine-raylib.git](https://github.com/Vasco-Alves/mini-engine-raylib.git)
+git clone --recursive https://github.com/Vasco-Alves/mini-engine-raylib.git
 cd mini-engine-raylib
 ```
 
