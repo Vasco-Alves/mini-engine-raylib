@@ -12,16 +12,18 @@ namespace editor {
 
 		void set_project_path(const std::filesystem::path& path);
 
-		void on_imgui_render();
+		std::filesystem::path get_current_directory() const { return m_CurrentDirectory; }
 
-		// --- Callbacks ---
-		// The main Editor App will listen to these to update its own state
-		std::function<void(const std::string&)> on_scene_loaded;
-		std::function<void()> on_entity_selection_cleared;
+		void on_imgui_render();
 
 	private:
 		std::filesystem::path m_ProjectPath = "";
 		std::filesystem::path m_CurrentDirectory = "";
+
+		// --- Modal State Tracking ---
+		bool m_ShowNewFolderModal = false;
+		bool m_ShowNewScriptModal = false;
+		char m_NewItemName[256] = "";
 	};
 
 } // namespace editor

@@ -1,13 +1,19 @@
 #pragma once
 
-#include "editor/panels/scene_hierarchy_panel.hpp"
-#include "editor/panels/content_browser_panel.hpp"
+#include <raylib.h>
+#include <string>
+#include <vector>
+#include <filesystem>
 
 #include <mini-engine-raylib/core/application.hpp>
 #include <mini-engine-raylib/ecs/components.hpp>
 
-#include <raylib.h>
-#include <filesystem>
+// --- Our Custom Panels ---
+#include "editor/panels/scene_hierarchy_panel.hpp"
+#include "editor/panels/content_browser_panel.hpp"
+#include "editor/panels/console_panel.hpp"
+#include "editor/panels/viewport_panel.hpp"
+#include "editor/panels/project_hub_panel.hpp"
 
 namespace editor {
 
@@ -18,6 +24,9 @@ namespace editor {
 
 	class EditorApp : public me::Application {
 	public:
+		EditorApp() = default;
+		~EditorApp() = default;
+
 		void on_start() override;
 		void on_update(float dt) override;
 		void on_render() override;
@@ -25,11 +34,19 @@ namespace editor {
 		void on_resize(int width, int height) override;
 
 	private:
-		// --- UI & Styling ---
-		void apply_theme();
+		// --- Sub-Systems ---
+		void poll_shortcuts();
 		void draw_menu_bar();
 		void draw_toolbar();
 		void draw_modals();
+		void apply_theme();
+
+		// --- Project Management ---
+		void create_project(const std::filesystem::path& path);
+		void load_project(const std::filesystem::path& path);
+		void load_engine_config();
+		void save_engine_config();
+		void add_recent_project(const std::string& path);
 
 		// --- Scene Management ---
 		void new_scene();
@@ -37,37 +54,37 @@ namespace editor {
 		void on_play();
 		void on_stop();
 
-		// --- Project Hub ---
-		void draw_project_hub();
-		void create_project(const std::filesystem::path& path);
-		void load_project(const std::filesystem::path& path);
-
-		// --- Panels ---
-		SceneHierarchyPanel m_HierarchyPanel;
-		ContentBrowserPanel m_BrowserPanel;
-
+	private:
 		// --- State Variables ---
+		bool m_IsProjectLoaded = false;
+		std::filesystem::path m_ProjectPath;
+		std::string m_CurrentScenePath;
+		SceneState m_SceneState = SceneState::Edit;
+		std::vector<std::string> m_RecentProjects;
+
 		bool m_ShowNewSceneModal = false;
 		char m_NewSceneInput[256] = "my_new_scene";
+		int m_GizmoType = 7; // ImGuizmo::TRANSLATE
 
-		bool m_IsProjectLoaded = false;
-		std::filesystem::path m_ProjectPath = "";
-		char m_ProjectInputPath[512] = "C:/Dev/MyNewGame";
-
-		std::string m_CurrentScenePath = "";
-		SceneState m_SceneState = SceneState::Edit;
-
-		// -- Viewport ---
-		RenderTexture2D m_ViewportTexture;
-		Vector2 m_ViewportBounds = { 1920.0f, 1080.0f };
-		bool m_SceneViewFocused = false;
+		// --- Camera ---
+		//Camera3D m_EditorCamera = { 0 };
+		me::components::CameraComponent m_EditorCamera;
+		me::components::TransformComponent m_EditorCameraTransform = {
+			{0.0f, 5.0f, 10.0f},
+			{-25.0f, 180.0f, 0.0f},
+			{1.0f, 1.0f, 1.0f}
+		};
 		bool m_IsFlying = false;
 
-		// -- Camera --
-		me::components::TransformComponent m_EditorCameraTransform = {
-			{0.0f, 5.0f, 10.0f}, {-25.0f, 180.0f, 0.0f}, {1.0f, 1.0f, 1.0f}
-		};
-		me::components::CameraComponent m_EditorCamera;
+		// --- Physics ---
+		bool m_StepPhysicsNextFrame = false;
+
+		// --- UI Panels ---
+		SceneHierarchyPanel m_HierarchyPanel;
+		ContentBrowserPanel m_BrowserPanel;
+		ConsolePanel m_ConsolePanel;
+		ViewportPanel m_ViewportPanel;
+		ProjectHubPanel m_HubPanel;
 	};
 
 } // namespace editor

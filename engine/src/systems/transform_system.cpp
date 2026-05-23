@@ -27,8 +27,8 @@ namespace me::systems {
 				Matrix matRot = MatrixRotateXYZ(radRot);
 				Matrix matTrans = MatrixTranslate(t.position.x, t.position.y, t.position.z);
 
-				Matrix rotScale = MatrixMultiply(matRot, matScale);
-				t.model_matrix = MatrixMultiply(matTrans, rotScale);
+				Matrix matTransform = MatrixMultiply(matScale, matRot);
+				t.model_matrix = MatrixMultiply(matTransform, matTrans);
 
 				t.last_position = t.position;
 				t.last_rotation = t.rotation;

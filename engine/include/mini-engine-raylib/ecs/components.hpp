@@ -29,6 +29,16 @@ namespace me::components {
 		bool is_dirty = true; // Force calculate on frame 1
 	};
 
+	struct LightComponent {
+		me::Color color = me::Color::white;
+		float intensity = 1.0f;
+	};
+
+	struct DirectionalLightComponent {
+		me::Color color = me::Color::white;
+		float intensity = 1.0f;
+	};
+
 	struct CameraComponent {
 		Vector3 target = { 0.0f, 0.0f, 0.0f };
 		Vector3 up = { 0.0f, 1.0f, 0.0f };

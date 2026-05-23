@@ -41,6 +41,8 @@ namespace me::input {
 
 		set_axis_deadzone("LookY", 0.05f);
 		set_axis_clamp("LookY", -5.0f, 5.0f);
+
+		bind_action("Jump", Key::Space);
 	}
 
 } // namespace me::input

@@ -23,4 +23,9 @@ namespace me {
 	int get_window_width();
 	int get_window_height();
 
+	// --- Time Controls ---
+	void set_paused(bool paused);
+	bool is_paused();
+	void step(int frames = 1);
+
 }

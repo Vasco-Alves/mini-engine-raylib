@@ -21,6 +21,8 @@ namespace me {
 		AppConfig config;
 		bool running = false;
 		bool is_playing = false;
+		bool is_paused = false;
+		int step_frames = 0;
 	};
 
 	static EngineState s_State;
@@ -84,8 +86,18 @@ namespace me {
 
 			// 1. Core Engine Systems
 			if (s_State.is_playing) {
-				me::systems::script_update(dt);
+				if (!s_State.is_paused) {
+					// Normal time flowing
+					me::systems::script_update(dt);
+				} else if (s_State.step_frames > 0) {
+					// Time is frozen, but user requested a frame step
+					float fixed_dt = 1.0f / 60.0f;
+					me::systems::script_update(fixed_dt);
+					s_State.step_frames--;
+				}
 			}
+
+			// Update transforms so the camera and editor can still move
 			me::systems::transform_update();
 
 			// 2. Application Logic (Editor or Game)
@@ -132,6 +144,20 @@ namespace me {
 
 	int get_window_height() {
 		return GetScreenHeight();
+	}
+
+	void set_paused(bool paused) {
+		s_State.is_paused = paused;
+	}
+
+	bool is_paused() {
+		return s_State.is_paused;
+	}
+
+	void step(int frames) {
+		if (s_State.is_paused) {
+			s_State.step_frames = frames;
+		}
 	}
 
 } // namespace me
