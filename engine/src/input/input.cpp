@@ -1,12 +1,12 @@
 #include "mini-engine-raylib/input/input.hpp"
 
-#include <raylib.h>
-
 #include <unordered_map>
 #include <vector>
 #include <algorithm>
 #include <cmath>
 #include <utility>
+
+#include <raylib.h>
 
 namespace me::input {
 
@@ -262,11 +262,11 @@ namespace me::input {
 		return apply_clamp(sum, minV, maxV);
 	}
 
-	me::math::Vec2 mouse_position() {
+	Vector2 mouse_position() {
 		return { GetMousePosition().x, GetMousePosition().y };
 	}
 
-	me::math::Vec2 mouse_delta() {
+	Vector2 mouse_delta() {
 		return { GetMouseDelta().x, GetMouseDelta().y };
 	}
 

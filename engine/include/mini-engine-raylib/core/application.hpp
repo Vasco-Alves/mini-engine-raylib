@@ -5,7 +5,7 @@
 namespace me {
 
 	struct AppConfig {
-		std::string title = "Mini Engine Game";
+		std::string title = "Mini Engine Raylib";
 		int width = 1280;
 		int height = 720;
 		bool vsync = false;
