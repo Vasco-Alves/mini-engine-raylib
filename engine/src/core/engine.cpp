@@ -1,13 +1,18 @@
-#include "core/engine.hpp"
-#include "input/input.hpp" 
-#include "mini-engine-raylib/input/input_defaults.hpp"
-#include "audio/Audio.hpp"
-#include "assets/Assets.hpp"
+#include "mini-engine-raylib/core/engine.hpp"
 
-#include <mini-ecs/registry.hpp>
+#include <memory>
 
 #include <raylib.h>
-#include <memory>
+
+#include "mini-engine-raylib/input/input.hpp" 
+#include "mini-engine-raylib/input/input_defaults.hpp"
+#include "mini-engine-raylib/audio/audio.hpp" 
+#include "mini-engine-raylib/assets/assets.hpp"
+#include "mini-engine-raylib/scripting/script_manager.hpp" 
+#include "mini-engine-raylib/systems/script_system.hpp"
+#include "mini-engine-raylib/systems/transform_system.hpp"
+
+#include <mini-ecs/registry.hpp>
 
 namespace me {
 
@@ -15,6 +20,9 @@ namespace me {
 		std::unique_ptr<Registry> registry;
 		AppConfig config;
 		bool running = false;
+		bool is_playing = false;
+		bool is_paused = false;
+		int step_frames = 0;
 	};
 
 	static EngineState s_State;
@@ -27,6 +35,9 @@ namespace me {
 			SetConfigFlags(FLAG_VSYNC_HINT);
 		}
 
+		// Enable resizing
+		SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+
 		InitWindow(config.width, config.height, config.title.c_str());
 		SetExitKey(0); // Disable default ESC to close
 
@@ -35,12 +46,13 @@ namespace me {
 			else SetTargetFPS(0);
 		}
 
-		// 2. Engine Subsystem Initialization (UPDATED TO SNAKE_CASE)
+		// 2. Engine Subsystem Initialization
 		me::input::setup_default_bindings();
 		me::audio::init();
 		me::audio::set_master_volume(0.9f);
+		me::scripting::init(); // Lua brain
 
-		// 3. ECS Init
+		// 3. ECS init
 		s_State.registry = std::make_unique<Registry>();
 
 		s_State.running = true;
@@ -54,9 +66,6 @@ namespace me {
 
 		int last_width = s_State.config.width;
 		int last_height = s_State.config.height;
-
-		double accumulator = 0.0;
-		int frames = 0;
 
 		while (s_State.running && !WindowShouldClose()) {
 			std::string title = s_State.config.title + " | FPS: " + std::to_string(GetFPS());
@@ -74,20 +83,40 @@ namespace me {
 			float dt = GetFrameTime();
 
 			me::input::poll();
+
+			// 1. Core Engine Systems
+			if (s_State.is_playing) {
+				if (!s_State.is_paused) {
+					// Normal time flowing
+					me::systems::script_update(dt);
+				} else if (s_State.step_frames > 0) {
+					// Time is frozen, but user requested a frame step
+					float fixed_dt = 1.0f / 60.0f;
+					me::systems::script_update(fixed_dt);
+					s_State.step_frames--;
+				}
+			}
+
+			// Update transforms so the camera and editor can still move
+			me::systems::transform_update();
+
+			// 2. Application Logic (Editor or Game)
 			app.on_update(dt);
 
+			// 3. Rendering
 			BeginDrawing();
-			//ClearBackground({ 25, 25, 30, 255 });
-			ClearBackground({ 0, 0, 0, 0});
+			ClearBackground({ 0, 0, 0, 0 });
 			app.on_render();
 			EndDrawing();
 		}
 
+		// 4. User Game Shutdown
 		app.on_shutdown();
 
 		// 5. Engine Cleanup
-		s_State.registry.reset();
-		me::assets::release_all();
+		s_State.registry.reset();   // ECS Dies First (destroys Lua Script Components)
+		me::scripting::shutdown();  // Lua Dies Second
+		me::assets::release_all();  // Audio/Textures Die Last
 		me::audio::shutdown();
 
 		CloseWindow();
@@ -95,6 +124,14 @@ namespace me {
 
 	Registry& get_registry() {
 		return *s_State.registry;
+	}
+
+	void set_playing(bool playing) {
+		s_State.is_playing = playing;
+	}
+
+	bool is_playing() {
+		return s_State.is_playing;
 	}
 
 	void close_application() {
@@ -107,6 +144,20 @@ namespace me {
 
 	int get_window_height() {
 		return GetScreenHeight();
+	}
+
+	void set_paused(bool paused) {
+		s_State.is_paused = paused;
+	}
+
+	bool is_paused() {
+		return s_State.is_paused;
+	}
+
+	void step(int frames) {
+		if (s_State.is_paused) {
+			s_State.step_frames = frames;
+		}
 	}
 
 } // namespace me

@@ -2,7 +2,7 @@
 find_package(raylib CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 
-# 2. Define Source Files (Lowercase and GameApp.cpp removed)
+# 2. Define Source Files
 set(SOURCES
     "src/assets/assets.cpp"
     "src/audio/audio.cpp"
@@ -12,7 +12,13 @@ set(SOURCES
     "src/input/input_defaults.cpp"
     "src/render/renderer.cpp"
     "src/render/camera_system.cpp"
-    "src/scene/scene.cpp"
+    "src/scripting/script_manager.cpp"
+    "src/systems/script_system.cpp"
+    "src/scene/scene_manager.cpp"
+    "src/systems/transform_system.cpp"
+    "src/core/vfs.cpp" 
+    "src/core/logger.cpp"
+    "src/systems/physics_system.cpp" 
 )
 
 # 3. Create the Library
@@ -20,7 +26,10 @@ add_library(engine STATIC ${SOURCES})
 
 # 4. Setup Include Directories
 target_include_directories(engine PUBLIC 
-    "include" # Exposes the namespace folder so users can do: #include <mini-engine-raylib/core/engine.hpp>
+    "include" 
+    "${CMAKE_SOURCE_DIR}/vendor/sol3/include"
+    "${CMAKE_SOURCE_DIR}/vendor/lua/src"
+    "${CMAKE_SOURCE_DIR}/vendor/JoltPhysics"
     
     # --- SHORTCUT DIRECTORIES ---
     "include/mini-engine-raylib"
@@ -37,5 +46,5 @@ target_include_directories(engine PUBLIC
 # 5. Link Dependencies
 target_link_libraries(engine 
     PRIVATE raylib 
-    PUBLIC nlohmann_json::nlohmann_json mini-ecs
+    PUBLIC nlohmann_json::nlohmann_json mini-ecs lua Jolt
 )
