@@ -1,9 +1,6 @@
 #include "mini-engine-raylib/core/engine.hpp"
-
 #include <memory>
-
 #include <raylib.h>
-
 #include "mini-engine-raylib/input/input.hpp" 
 #include "mini-engine-raylib/input/input_defaults.hpp"
 #include "mini-engine-raylib/audio/audio.hpp" 
@@ -11,8 +8,10 @@
 #include "mini-engine-raylib/scripting/script_manager.hpp" 
 #include "mini-engine-raylib/systems/script_system.hpp"
 #include "mini-engine-raylib/systems/transform_system.hpp"
-
 #include <mini-ecs/registry.hpp>
+
+#include "mini-engine-raylib/ecs/components.hpp"
+#include "mini-engine-raylib/ecs/audio_components.hpp"
 
 namespace me {
 
@@ -30,29 +29,22 @@ namespace me {
 	bool init(const AppConfig& config) {
 		s_State.config = config;
 
-		// 1. Raylib Window Initialization
-		if (config.vsync) {
-			SetConfigFlags(FLAG_VSYNC_HINT);
-		}
-
-		// Enable resizing
+		if (config.vsync) SetConfigFlags(FLAG_VSYNC_HINT);
 		SetConfigFlags(FLAG_WINDOW_RESIZABLE);
 
 		InitWindow(config.width, config.height, config.title.c_str());
-		SetExitKey(0); // Disable default ESC to close
+		SetExitKey(0);
 
 		if (!config.vsync) {
 			if (config.target_fps > 0) SetTargetFPS(config.target_fps);
 			else SetTargetFPS(0);
 		}
 
-		// 2. Engine Subsystem Initialization
 		me::input::setup_default_bindings();
 		me::audio::init();
 		me::audio::set_master_volume(0.9f);
-		me::scripting::init(); // Lua brain
+		me::scripting::init();
 
-		// 3. ECS init
 		s_State.registry = std::make_unique<Registry>();
 
 		s_State.running = true;
@@ -81,83 +73,62 @@ namespace me {
 
 			// -- Update Subsystems & Game --
 			float dt = GetFrameTime();
-
 			me::input::poll();
 
-			// 1. Core Engine Systems
 			if (s_State.is_playing) {
 				if (!s_State.is_paused) {
-					// Normal time flowing
 					me::systems::script_update(dt);
 				} else if (s_State.step_frames > 0) {
-					// Time is frozen, but user requested a frame step
 					float fixed_dt = 1.0f / 60.0f;
 					me::systems::script_update(fixed_dt);
 					s_State.step_frames--;
 				}
 			}
 
-			// Update transforms so the camera and editor can still move
 			me::systems::transform_update();
 
-			// 2. Application Logic (Editor or Game)
 			app.on_update(dt);
 
-			// 3. Rendering
 			BeginDrawing();
 			ClearBackground({ 0, 0, 0, 0 });
 			app.on_render();
 			EndDrawing();
+
+			// ==========================================
+			// 4. PROCESS ECS DEFERRED DELETIONS
+			// ==========================================
+			s_State.registry->process_deletions([&](me::entity::entity_id e) {
+				// Safely release native hardware handles before the entity is destroyed
+				if (auto* audio = s_State.registry->try_get_component<me::components::AudioSourceComponent>(e)) {
+					if (audio->clip.handle != 0) me::audio::release(audio->clip);
+				}
+				if (auto* bgm = s_State.registry->try_get_component<me::components::BackgroundMusicComponent>(e)) {
+					if (bgm->stream.handle != 0) me::audio::release(bgm->stream);
+				}
+				if (auto* model = s_State.registry->try_get_component<me::components::Model3DComponent>(e)) {
+					if (model->model.handle != 0) me::assets::release(model->model);
+				}
+				});
 		}
 
-		// 4. User Game Shutdown
 		app.on_shutdown();
 
-		// 5. Engine Cleanup
-		s_State.registry.reset();   // ECS Dies First (destroys Lua Script Components)
-		me::scripting::shutdown();  // Lua Dies Second
-		me::assets::release_all();  // Audio/Textures Die Last
+		s_State.registry.reset();
+		me::scripting::shutdown();
+		me::assets::release_all();
 		me::audio::shutdown();
 
 		CloseWindow();
 	}
 
-	Registry& get_registry() {
-		return *s_State.registry;
-	}
-
-	void set_playing(bool playing) {
-		s_State.is_playing = playing;
-	}
-
-	bool is_playing() {
-		return s_State.is_playing;
-	}
-
-	void close_application() {
-		s_State.running = false;
-	}
-
-	int get_window_width() {
-		return GetScreenWidth();
-	}
-
-	int get_window_height() {
-		return GetScreenHeight();
-	}
-
-	void set_paused(bool paused) {
-		s_State.is_paused = paused;
-	}
-
-	bool is_paused() {
-		return s_State.is_paused;
-	}
-
-	void step(int frames) {
-		if (s_State.is_paused) {
-			s_State.step_frames = frames;
-		}
-	}
+	Registry& get_registry() { return *s_State.registry; }
+	void set_playing(bool playing) { s_State.is_playing = playing; }
+	bool is_playing() { return s_State.is_playing; }
+	void close_application() { s_State.running = false; }
+	int get_window_width() { return GetScreenWidth(); }
+	int get_window_height() { return GetScreenHeight(); }
+	void set_paused(bool paused) { s_State.is_paused = paused; }
+	bool is_paused() { return s_State.is_paused; }
+	void step(int frames) { if (s_State.is_paused) s_State.step_frames = frames; }
 
 } // namespace me

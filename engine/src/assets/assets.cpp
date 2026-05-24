@@ -5,12 +5,9 @@
 #include "mini-engine-raylib/ecs/components.hpp"
 
 #include <unordered_map>
-#include <unordered_set>
 #include <string>
 #include <cstdint>
-#include <utility>
 #include <filesystem>
-
 #include <raylib.h>
 
 namespace fs = std::filesystem;
@@ -19,6 +16,19 @@ namespace me::assets {
 
 	namespace {
 		// ====================================================================
+		// FNV-1a HASH ALGORITHM
+		// Crushes a file path string into a unique 32-bit integer.
+		// ====================================================================
+		constexpr std::uint32_t hash_path(const char* str) {
+			std::uint32_t hash = 2166136261u;
+			while (*str) {
+				hash ^= static_cast<std::uint32_t>(*str++);
+				hash *= 16777619u;
+			}
+			return hash;
+		}
+
+		// ====================================================================
 		// CACHE DATA STRUCTURES
 		// ====================================================================
 
@@ -26,23 +36,20 @@ namespace me::assets {
 		struct TexRecord {
 			::Texture2D tex{};
 			int refs = 0;
-			std::uint32_t handle = 0;
 		};
 
-		std::unordered_map<std::string, TexRecord> s_by_path;
-		std::unordered_map<std::uint32_t, std::string> s_handle_to_path;
-		std::uint32_t s_next_handle = 1;
+		// Notice: The key is now a blazing fast uint32_t integer!
+		std::unordered_map<std::uint32_t, TexRecord> s_textures;
+		std::unordered_map<std::uint32_t, std::string> s_texture_paths; // Kept only so we can save paths to JSON
 
 		// --- Model Cache ---
 		struct ModelRec {
 			::Model model{};
 			int refs = 0;
-			std::uint32_t handle = 0;
 		};
 
-		std::unordered_map<std::string, ModelRec> s_model_by_path;
-		std::unordered_map<std::uint32_t, std::string> s_model_handle_to;
-		std::uint32_t s_next_model_handle = 1;
+		std::unordered_map<std::uint32_t, ModelRec> s_models;
+		std::unordered_map<std::uint32_t, std::string> s_model_paths;
 	}
 
 	// ====================================================================
@@ -51,20 +58,18 @@ namespace me::assets {
 
 	void release_all() {
 		// Clean up Textures
-		for (auto& kv : s_by_path) {
+		for (auto& kv : s_textures) {
 			UnloadTexture(kv.second.tex);
 		}
-		s_by_path.clear();
-		s_handle_to_path.clear();
-		s_next_handle = 1;
+		s_textures.clear();
+		s_texture_paths.clear();
 
 		// Clean up Models
-		for (auto& kv : s_model_by_path) {
+		for (auto& kv : s_models) {
 			UnloadModel(kv.second.model);
 		}
-		s_model_by_path.clear();
-		s_model_handle_to.clear();
-		s_next_model_handle = 1;
+		s_models.clear();
+		s_model_paths.clear();
 	}
 
 	// ====================================================================
@@ -73,84 +78,61 @@ namespace me::assets {
 
 	const ::Texture2D* internal_get_texture(TextureId id) {
 		if (id.handle == 0) return nullptr;
-		auto itPath = s_handle_to_path.find(id.handle);
-		if (itPath == s_handle_to_path.end()) return nullptr;
-		auto itRec = s_by_path.find(itPath->second);
-		if (itRec == s_by_path.end()) return nullptr;
-		return &itRec->second.tex;
+		auto it = s_textures.find(id.handle);
+		if (it == s_textures.end()) return nullptr;
+		return &it->second.tex;
 	}
 
 	const char* internal_get_texture_path(TextureId id) {
 		if (id.handle == 0) return nullptr;
-		auto itPath = s_handle_to_path.find(id.handle);
-		if (itPath == s_handle_to_path.end()) return nullptr;
-		return itPath->second.c_str();
+		auto it = s_texture_paths.find(id.handle);
+		if (it == s_texture_paths.end()) return nullptr;
+		return it->second.c_str();
 	}
 
 	TextureId load_texture(const char* uri) {
-		TextureId out{};
-		if (!uri || !*uri) return out;
+		if (!uri || !*uri) return TextureId{ 0 };
 
-		const std::string key = uri;
-		auto it = s_by_path.find(key);
-		if (it == s_by_path.end()) {
+		// 1. Hash the string instantly
+		std::uint32_t handle = hash_path(uri);
+		auto it = s_textures.find(handle);
+
+		// 2. Load from disk if it doesn't exist
+		if (it == s_textures.end()) {
 			const std::string path = me::vfs::resolve(uri);
 			::Image img = LoadImage(path.c_str());
 			if (img.data == nullptr) {
-				return out;
+				return TextureId{ 0 };
 			}
 			::Texture2D tex = LoadTextureFromImage(img);
 			UnloadImage(img);
 
-			TexRecord rec{};
-			rec.tex = tex;
-			rec.refs = 1;
-			rec.handle = s_next_handle++;
-
-			s_by_path.emplace(key, rec);
-
-			out.handle = rec.handle;
-			s_handle_to_path[out.handle] = key;
-		} else {
-			it->second.refs += 1;
-			out.handle = it->second.handle;
-
-			if (out.handle == 0) {
-				out.handle = s_next_handle++;
-				it->second.handle = out.handle;
-				s_handle_to_path[out.handle] = key;
-			}
+			s_textures[handle] = TexRecord{ tex, 1 };
+			s_texture_paths[handle] = uri; // Save the string for JSON serialization
 		}
-		return out;
+		// 3. Just increment the ref count!
+		else {
+			it->second.refs += 1;
+		}
+
+		return TextureId{ handle };
 	}
 
 	void release(TextureId id) {
 		if (id.handle == 0) return;
-		auto itPath = s_handle_to_path.find(id.handle);
-		if (itPath == s_handle_to_path.end()) return;
+		auto it = s_textures.find(id.handle);
+		if (it == s_textures.end()) return;
 
-		const std::string& key = itPath->second;
-		auto itRec = s_by_path.find(key);
-		if (itRec == s_by_path.end()) {
-			s_handle_to_path.erase(itPath);
-			return;
+		it->second.refs -= 1;
+		if (it->second.refs <= 0) {
+			UnloadTexture(it->second.tex);
+			s_textures.erase(it);
+			s_texture_paths.erase(id.handle);
 		}
-
-		itRec->second.refs -= 1;
-		if (itRec->second.refs <= 0) {
-			UnloadTexture(itRec->second.tex);
-			s_by_path.erase(itRec);
-		}
-
-		s_handle_to_path.erase(itPath);
 	}
 
 	bool is_texture_valid(TextureId id) {
-		if (id.handle == 0) return false;
-		auto itPath = s_handle_to_path.find(id.handle);
-		if (itPath == s_handle_to_path.end()) return false;
-		auto itRec = s_by_path.find(itPath->second);
-		return itRec != s_by_path.end();
+		return s_textures.find(id.handle) != s_textures.end();
 	}
 
 	Vector2 texture_size(TextureId id) {
@@ -168,71 +150,59 @@ namespace me::assets {
 
 	const ::Model* internal_get_model(ModelId id) {
 		if (id.handle == 0) return nullptr;
-		auto itPath = s_model_handle_to.find(id.handle);
-		if (itPath == s_model_handle_to.end()) return nullptr;
-		auto itRec = s_model_by_path.find(itPath->second);
-		if (itRec == s_model_by_path.end()) return nullptr;
-		return &itRec->second.model;
+		auto it = s_models.find(id.handle);
+		if (it == s_models.end()) return nullptr;
+		return &it->second.model;
 	}
 
 	const char* internal_get_model_path(ModelId id) {
 		if (id.handle == 0) return nullptr;
-		auto itPath = s_model_handle_to.find(id.handle);
-		if (itPath == s_model_handle_to.end()) return nullptr;
-		return itPath->second.c_str();
+		auto it = s_model_paths.find(id.handle);
+		if (it == s_model_paths.end()) return nullptr;
+		return it->second.c_str();
 	}
 
 	ModelId load_model(const char* uri) {
-		ModelId out{};
-		if (!uri || !*uri) return out;
+		if (!uri || !*uri) return ModelId{ 0 };
 
-		const std::string key = uri;
-		auto it = s_model_by_path.find(key);
+		// 1. Hash the string instantly
+		std::uint32_t handle = hash_path(uri);
+		auto it = s_models.find(handle);
 
-		// 1. If it's not loaded, load it from disk!
-		if (it == s_model_by_path.end()) {
+		// 2. Load from disk if it doesn't exist
+		if (it == s_models.end()) {
 			const std::string path = me::vfs::resolve(uri);
 			::Model mod = LoadModel(path.c_str());
 
 			// Raylib leaves mesh count at 0 if the load fails
-			if (mod.meshCount == 0) return out;
+			if (mod.meshCount == 0) return ModelId{ 0 };
 
-			ModelRec rec{};
-			rec.model = mod;
-			rec.refs = 1;
-			rec.handle = s_next_model_handle++;
-
-			s_model_by_path.emplace(key, rec);
-			out.handle = rec.handle;
-			s_model_handle_to[out.handle] = key;
+			s_models[handle] = ModelRec{ mod, 1 };
+			s_model_paths[handle] = uri;
 		}
-		// 2. If it is already loaded, just increase the reference count!
+		// 3. Just increase the reference count!
 		else {
 			it->second.refs += 1;
-			out.handle = it->second.handle;
 		}
-		return out;
+
+		return ModelId{ handle };
 	}
 
 	void release(ModelId id) {
 		if (id.handle == 0) return;
-		auto itPath = s_model_handle_to.find(id.handle);
-		if (itPath == s_model_handle_to.end()) return;
+		auto it = s_models.find(id.handle);
+		if (it == s_models.end()) return;
 
-		const std::string& key = itPath->second;
-		auto itRec = s_model_by_path.find(key);
-		if (itRec == s_model_by_path.end()) return;
-
-		itRec->second.refs -= 1;
-		if (itRec->second.refs <= 0) {
-			UnloadModel(itRec->second.model);
-			s_model_by_path.erase(itRec);
+		it->second.refs -= 1;
+		if (it->second.refs <= 0) {
+			UnloadModel(it->second.model);
+			s_models.erase(it);
+			s_model_paths.erase(id.handle);
 		}
-		s_model_handle_to.erase(itPath);
 	}
 
 	bool is_model_valid(ModelId id) {
-		return internal_get_model(id) != nullptr;
+		return s_models.find(id.handle) != s_models.end();
 	}
 
 } // namespace me::assets

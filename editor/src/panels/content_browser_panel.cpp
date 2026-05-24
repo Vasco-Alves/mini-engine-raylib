@@ -1,13 +1,12 @@
 #include "editor/panels/content_browser_panel.hpp"
-
 #include <mini-engine-raylib/scene/scene_manager.hpp>
 #include <mini-engine-raylib/core/engine.hpp>
 #include <mini-engine-raylib/ecs/components.hpp>
 #include <mini-engine-raylib/assets/assets.hpp>
 #include <mini-engine-raylib/core/file_system.hpp>
 #include <mini-engine-raylib/core/events.hpp>
+#include <mini-engine-raylib/audio/audio.hpp>
 #include <mini-ecs/registry.hpp>
-
 #include <imgui.h>
 #include <algorithm>
 
@@ -84,6 +83,9 @@ namespace editor {
 				} else if (ext == ".png") {
 					iconLabel = "[TEX]";
 					iconColor = ImVec4(0.8f, 0.2f, 0.8f, 1.0f); // Texture Purple
+				} else if (ext == ".wav" || ext == ".ogg" || ext == ".mp3") {
+					iconLabel = "[SND]";
+					iconColor = ImVec4(0.2f, 0.9f, 0.8f, 1.0f); // Audio Teal
 				}
 
 				ImGui::PushStyleColor(ImGuiCol_Text, iconColor);
@@ -96,9 +98,11 @@ namespace editor {
 
 				// --- RIGHT CLICK SPECIFIC ITEM (Delete Menu) ---
 				if (ImGui::BeginPopupContextItem()) {
-					if (ImGui::MenuItem("Delete")) {
+					ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.2f, 0.2f, 1.0f)); // Red text
+					if (ImGui::MenuItem("Delete Item")) {
 						me::fs::remove_all(path.string());
 					}
+					ImGui::PopStyleColor();
 					ImGui::EndPopup();
 				}
 
@@ -135,6 +139,13 @@ namespace editor {
 							me::assets::load_model(relative_vfs.c_str()),
 							me::Color::white
 							});
+					} else if (ext == ".wav" || ext == ".ogg" || ext == ".mp3") {
+						// Instantly preview audio files at 100% volume in the center of the stereo field
+						std::string relative_vfs = "game://" + std::filesystem::relative(path, m_ProjectPath / "assets").string();
+						std::replace(relative_vfs.begin(), relative_vfs.end(), '\\', '/');
+
+						me::audio::SoundId preview_snd = me::audio::load(relative_vfs.c_str());
+						me::audio::play(preview_snd, 1.0f, 1.0f, 0.5f);
 					}
 				}
 
@@ -183,7 +194,7 @@ namespace editor {
 				std::string filename = m_NewItemName;
 				if (filename.find(".lua") == std::string::npos) filename += ".lua";
 
-				// Write the boilerplate Lua code via our File System!
+				// Write the boilerplate Lua
 				std::string boilerplate =
 					"-- " + filename + "\n\n"
 					"function start(entity)\n\nend\n\n"

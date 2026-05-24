@@ -13,7 +13,7 @@ namespace me::audio {
 	SoundId  load(const char* uri);
 	void     release(SoundId id);
 
-	void     play(SoundId id, float volume = 1.0f, float pitch = 1.0f);
+	void	 play(SoundId id, float volume = 1.0f, float pitch = 1.0f, float pan = 0.5f);
 	void     stop(SoundId id);
 	void     set_master_volume(float v);    // 0..1
 

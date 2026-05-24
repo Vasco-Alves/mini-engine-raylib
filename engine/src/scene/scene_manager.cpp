@@ -2,12 +2,15 @@
 
 #include <fstream>
 #include <iostream>
+#include <unordered_map>
+#include <vector>
 #include <nlohmann/json.hpp>
 
 #include "mini-engine-raylib/core/engine.hpp"
 #include "mini-engine-raylib/core/events.hpp"
 #include "mini-engine-raylib/ecs/components.hpp"
-#include "mini-engine-raylib/ecs/physics_components.hpp" // NEW: We need to see the physics components
+#include "mini-engine-raylib/ecs/physics_components.hpp"
+#include "mini-engine-raylib/ecs/audio_components.hpp"
 #include "mini-engine-raylib/ecs/script_component.hpp"
 #include "mini-engine-raylib/core/file_system.hpp"
 #include "../assets/assets_internal.hpp"
@@ -43,7 +46,10 @@ namespace me {
 				comps["Transform"] = json{
 					{"x", t.position.x}, {"y", t.position.y}, {"z", t.position.z},
 					{"rot_x", t.rotation.x}, {"rot_y", t.rotation.y}, {"rot_z", t.rotation.z},
-					{"sx", t.scale.x}, {"sy", t.scale.y}, {"sz", t.scale.z}
+					{"sx", t.scale.x}, {"sy", t.scale.y}, {"sz", t.scale.z},
+					// NEW: Save Hierarchy Data
+					{"parent", static_cast<uint32_t>(t.parent)},
+					{"children", t.children}
 				};
 
 				// 2. Tag
@@ -163,6 +169,35 @@ namespace me {
 					};
 				}
 
+				// 14. AudioListener
+				if (auto* listener = reg.try_get_component<me::components::AudioListenerComponent>(e)) {
+					comps["AudioListener"] = json{
+						{"active", listener->active}
+					};
+				}
+
+				// 15. AudioSource
+				if (auto* audio = reg.try_get_component<me::components::AudioSourceComponent>(e)) {
+					comps["AudioSource"] = json{
+						{"filepath", audio->filepath},
+						{"volume", audio->volume},
+						{"pitch", audio->pitch},
+						{"play_on_awake", audio->play_on_awake},
+						{"spatial", audio->spatial},
+						{"max_distance", audio->max_distance}
+					};
+				}
+
+				// 16. Background Music
+				if (auto* bgm = reg.try_get_component<me::components::BackgroundMusicComponent>(e)) {
+					comps["BackgroundMusic"] = json{
+						{"filepath", bgm->filepath},
+						{"volume", bgm->volume},
+						{"loop", bgm->loop},
+						{"play_on_awake", bgm->play_on_awake}
+					};
+				}
+
 				je["components"] = std::move(comps);
 				root["entities"].push_back(std::move(je));
 			}
@@ -196,10 +231,30 @@ namespace me {
 			auto& reg = me::get_registry();
 			if (!root.contains("entities") || !root["entities"].is_array()) return true;
 
+			// =================================================================
+			// PASS 1: Entity Creation & ID Mapping
+			// =================================================================
+			std::unordered_map<uint32_t, me::entity::entity_id> old_to_new;
+			std::vector<me::Entity> loaded_entities;
+
 			for (const auto& je : root["entities"]) {
 				me::Entity e = reg.create_entity();
-				if (!je.contains("components")) continue;
+				loaded_entities.push_back(e);
 
+				uint32_t old_id = je.value("id", 0);
+				if (old_id != 0) {
+					old_to_new[old_id] = e.get_id();
+				}
+			}
+
+			// =================================================================
+			// PASS 2: Component Parsing & Hierarchy Linking
+			// =================================================================
+			for (size_t i = 0; i < root["entities"].size(); ++i) {
+				const auto& je = root["entities"][i];
+				me::Entity e = loaded_entities[i];
+
+				if (!je.contains("components")) continue;
 				const auto& comps = je["components"];
 
 				if (comps.contains("Tag")) {
@@ -208,11 +263,29 @@ namespace me {
 
 				if (comps.contains("Transform")) {
 					auto& j = comps["Transform"];
-					e.add_component(me::components::TransformComponent{
-						{ j.value("x", 0.f), j.value("y", 0.f), j.value("z", 0.f) },
-						{ j.value("rot_x", 0.f), j.value("rot_y", 0.f), j.value("rot_z", 0.f) },
-						{ j.value("sx", 1.f), j.value("sy", 1.f), j.value("sz", 1.f) }
-						});
+					me::components::TransformComponent tc;
+					tc.position = { j.value("x", 0.f), j.value("y", 0.f), j.value("z", 0.f) };
+					tc.rotation = { j.value("rot_x", 0.f), j.value("rot_y", 0.f), j.value("rot_z", 0.f) };
+					tc.scale = { j.value("sx", 1.f), j.value("sy", 1.f), j.value("sz", 1.f) };
+
+					// Re-link Parent
+					uint32_t old_parent = j.value("parent", 0);
+					if (old_parent != 0 && old_to_new.count(old_parent)) {
+						tc.parent = old_to_new[old_parent];
+					} else {
+						tc.parent = me::entity::null;
+					}
+
+					// Re-link Children
+					if (j.contains("children") && j["children"].is_array()) {
+						for (uint32_t old_child : j["children"]) {
+							if (old_to_new.count(old_child)) {
+								tc.children.push_back(old_to_new[old_child]);
+							}
+						}
+					}
+
+					e.add_component(tc);
 				}
 
 				if (comps.contains("MeshRenderer")) {
@@ -322,7 +395,7 @@ namespace me {
 				if (comps.contains("RigidBody")) {
 					auto& j = comps["RigidBody"];
 					me::components::RigidBodyComponent rb;
-					rb.type = static_cast<me::components::RigidBodyType>(j.value("type", 1)); // 1 == Dynamic
+					rb.type = static_cast<me::components::RigidBodyType>(j.value("type", 1));
 					rb.mass = j.value("mass", 1.0f);
 					rb.bounciness = j.value("bounciness", 0.2f);
 					rb.friction = j.value("friction", 0.5f);
@@ -343,6 +416,44 @@ namespace me {
 					col.radius = j.value("radius", 1.0f);
 					col.show_debug = j.value("show_debug", true);
 					e.add_component(col);
+				}
+
+				if (comps.contains("AudioListener")) {
+					auto& j = comps["AudioListener"];
+					me::components::AudioListenerComponent listener;
+					listener.active = j.value("active", true);
+					e.add_component(listener);
+				}
+
+				if (comps.contains("AudioSource")) {
+					auto& j = comps["AudioSource"];
+					me::components::AudioSourceComponent audio;
+					audio.filepath = j.value("filepath", "");
+					audio.volume = j.value("volume", 1.0f);
+					audio.pitch = j.value("pitch", 1.0f);
+					audio.play_on_awake = j.value("play_on_awake", false);
+					audio.spatial = j.value("spatial", true);
+					audio.max_distance = j.value("max_distance", 50.0f);
+
+					if (!audio.filepath.empty()) {
+						audio.clip = me::audio::load(audio.filepath.c_str());
+					}
+
+					e.add_component(audio);
+				}
+
+				if (comps.contains("BackgroundMusic")) {
+					auto& j = comps["BackgroundMusic"];
+					me::components::BackgroundMusicComponent bgm;
+					bgm.filepath = j.value("filepath", "");
+					bgm.volume = j.value("volume", 1.0f);
+					bgm.loop = j.value("loop", true);
+					bgm.play_on_awake = j.value("play_on_awake", false);
+
+					if (!bgm.filepath.empty()) {
+						bgm.stream = me::audio::load_music(bgm.filepath.c_str());
+					}
+					e.add_component(bgm);
 				}
 			}
 

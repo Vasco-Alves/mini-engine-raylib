@@ -1,7 +1,6 @@
 #pragma once
-
-#include <mini-ecs/registry.hpp>
 #include <mini-ecs/entity.hpp>
+#include <mini-ecs/registry.hpp>
 
 namespace editor {
 
@@ -9,10 +8,7 @@ namespace editor {
 	public:
 		SceneHierarchyPanel() = default;
 
-		// Gives the panel a pointer to the active ECS world
 		void set_context(me::Registry* context);
-
-		// Draws both the Hierarchy and the Inspector
 		void on_imgui_render();
 
 		me::entity::entity_id get_selected_entity() const { return m_SelectionContext; }
@@ -20,10 +16,10 @@ namespace editor {
 
 	private:
 		void draw_entity_node(me::entity::entity_id entity);
-		void draw_components(me::entity::entity_id entity);
 
+	private:
 		me::Registry* m_Context = nullptr;
 		me::entity::entity_id m_SelectionContext = 0xFFFFFFFF;
 	};
 
-} // namespace editor
+}

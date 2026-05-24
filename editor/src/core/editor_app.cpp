@@ -14,17 +14,25 @@
 #include <mini-engine-raylib/core/events.hpp>
 #include <mini-engine-raylib/core/logger.hpp>
 #include <mini-engine-raylib/input/input.hpp>
+#include <mini-engine-raylib/audio/audio.hpp>
 #include <mini-engine-raylib/render/renderer.hpp>
 #include <mini-engine-raylib/scene/scene_manager.hpp>
 #include <mini-engine-raylib/ecs/script_component.hpp>
+#include <mini-engine-raylib/ecs/audio_components.hpp>
 #include <mini-engine-raylib/systems/camera_system.hpp>
 #include <mini-engine-raylib/systems/physics_system.hpp>
+#include <mini-engine-raylib/systems/audio_system.hpp>
+
 
 namespace editor {
 
 	void EditorApp::on_start() {
 		me::input::bind_digital_axis("MoveY", me::input::Key::Q, me::input::Key::E, 1.0f);
 
+		// Mount the root folder (where the executable lives)
+		me::vfs::mount("root", ".");
+
+		// Mount the engine assets folder
 		me::vfs::mount("engine", "assets");
 
 		rlImGuiSetup(true);
@@ -34,7 +42,11 @@ namespace editor {
 		// Subscribe to Events
 		auto& bus = me::get_event_bus();
 		bus.subscribe<me::events::LogEvent>([](auto* e) { ConsolePanel::add_log(e->message, e->level); });
-		bus.subscribe<me::events::SceneLoadedEvent>([this](auto* e) { m_CurrentScenePath = e->filepath; });
+		bus.subscribe<me::events::SceneLoadedEvent>([this](auto* e) {
+			if (e->filepath.find(".temp_play.json") == std::string::npos) {
+				m_CurrentScenePath = e->filepath;
+			}
+			});
 		bus.subscribe<me::events::EntitySelectedEvent>([this](auto* e) { m_HierarchyPanel.set_selected_entity(e->entity_id); });
 
 		// Wire up the Project Hub Callbacks
@@ -43,8 +55,8 @@ namespace editor {
 
 		load_engine_config();
 		m_ViewportPanel.on_start();
-		me::render::init();
 
+		me::render::init();
 		me::physics::init();
 	}
 
@@ -82,7 +94,7 @@ namespace editor {
 		}
 
 		// Editor Camera Flying
-		if (m_ViewportPanel.is_focused() && me::input::action_pressed("MouseRight")) {
+		if (m_ViewportPanel.is_hovered() && me::input::action_pressed("MouseRight")) {
 			m_IsFlying = true;
 			me::input::lock_cursor();
 		}
@@ -97,12 +109,9 @@ namespace editor {
 
 		// Step the physics simulation
 		if (me::is_playing()) {
-			// Run physics if we are actively playing, OR if the user clicked the Step button
 			if (!me::is_paused() || m_StepPhysicsNextFrame) {
 
-				// Use the real dt if playing normally, but force a perfect 60fps step if debugging
 				float physics_dt = me::is_paused() ? (1.0f / 60.0f) : dt;
-
 				me::physics::update(me::get_registry(), physics_dt);
 
 				m_StepPhysicsNextFrame = false;
@@ -110,6 +119,17 @@ namespace editor {
 		}
 
 		poll_shortcuts();
+
+		// ==========================================
+		// 3D AUDIO SPATIAL UPDATE (Moved outside the physics if-statement!)
+		// ==========================================
+		// Calculate the Editor Camera's forward vector
+		Vector3 editor_pos = { m_EditorCameraTransform.position.x, m_EditorCameraTransform.position.y, m_EditorCameraTransform.position.z };
+		Vector3 editor_target = { m_EditorCamera.target.x, m_EditorCamera.target.y, m_EditorCamera.target.z };
+		Vector3 editor_forward = Vector3Normalize(Vector3Subtract(editor_target, editor_pos));
+		Vector3 editor_up = { m_EditorCamera.up.x, m_EditorCamera.up.y, m_EditorCamera.up.z };
+
+		me::systems::audio_update(me::get_registry(), editor_pos, editor_forward, editor_up);
 	}
 
 	void EditorApp::on_render() {
@@ -183,8 +203,8 @@ namespace editor {
 					DrawSphere(endPos, 0.15f, c);
 				}
 			}
-
 		}
+
 		// --- Draw Physics Hitboxes ---
 		me::physics::draw_debug(me::get_registry());
 
@@ -194,14 +214,33 @@ namespace editor {
 		// 2. Render the UI
 		ClearBackground(BLACK);
 		rlImGuiBegin();
-		ImGuizmo::BeginFrame(); // Always required for ImGuizmo!
+		ImGuizmo::BeginFrame();
+
+		// ==========================================
+		// DEFERRED UI LAYOUT LOADING & SAVING
+		// ==========================================
+		if (m_WantsToSaveLayout) {
+			std::string path = me::vfs::resolve("root://custom_layout.ini");
+			ImGui::SaveIniSettingsToDisk(path.c_str());
+			me::logger::info("Saved custom layout to: " + path);
+			m_WantsToSaveLayout = false;
+		}
+
+		if (m_WantsToLoadLayout) {
+			std::string path = me::vfs::resolve("root://custom_layout.ini");
+			ImGui::LoadIniSettingsFromDisk(path.c_str());
+			me::logger::info("Loaded custom layout from: " + path);
+			m_WantsToLoadLayout = false;
+		}
 
 		ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
 
 		draw_menu_bar();
 		draw_toolbar();
 
+		// Draw Panels
 		m_HierarchyPanel.on_imgui_render();
+		m_InspectorPanel.on_imgui_render(&me::get_registry(), m_HierarchyPanel.get_selected_entity());
 		m_BrowserPanel.on_imgui_render();
 		m_ConsolePanel.on_imgui_render();
 
@@ -215,102 +254,113 @@ namespace editor {
 
 	void EditorApp::poll_shortcuts() {
 		bool ctrl = ImGui::GetIO().KeyCtrl;
+		bool wantText = ImGui::GetIO().WantTextInput;
 		me::entity::entity_id selected = m_HierarchyPanel.get_selected_entity();
 
-		// 1. Save Scene (Ctrl + S)
-		if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
-			save_scene();
+		// Global shortcuts — always fire (unless typing in a text box)
+		if (!wantText) {
+
+			// 1. Save Scene (Ctrl + S)
+			if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
+				save_scene();
+				me::logger::info("Saved scene in " + m_CurrentScenePath);
+			}
+
+			// 2. New Scene (Ctrl + N)
+			if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N)) {
+				m_ShowNewSceneModal = true;
+				strncpy(m_NewSceneInput, "my_new_scene", sizeof(m_NewSceneInput));
+			}
+
+			// 3. Play / Stop toggle (Ctrl + P)
+			if (ctrl && ImGui::IsKeyPressed(ImGuiKey_P)) {
+				if (m_SceneState == SceneState::Edit) { on_play(); me::set_paused(false); } else                                    on_stop();
+			}
 		}
 
-		// 2. New Scene (Ctrl + N)
-		if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N)) {
-			m_ShowNewSceneModal = true;
-			strncpy(m_NewSceneInput, "my_new_scene", sizeof(m_NewSceneInput));
-		}
+		// Entity shortcuts — only when not flying and not typing
+		if (!m_IsFlying && !wantText) {
 
-		// 3. Delete Selected Entity (Delete Key)
-		if (selected != 0xFFFFFFFF && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
-			me::get_registry().destroy_entity(selected);
-			m_HierarchyPanel.set_selected_entity(0xFFFFFFFF); // Clear selection
-		}
+			// 4. Escape to deselect
+			if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+				m_HierarchyPanel.set_selected_entity(0xFFFFFFFF);
+			}
 
-		// 4. Duplicate Entity (Ctrl + D)
-		if (selected != 0xFFFFFFFF && ctrl && ImGui::IsKeyPressed(ImGuiKey_D) && !ImGui::GetIO().WantTextInput) {
-			auto& reg = me::get_registry();
-
-			// Figure out the new name
-			auto old_tag = reg.try_get_component<me::components::TagComponent>(selected);
-			std::string new_name = old_tag ? (old_tag->name + " (Clone)") : "Entity (Clone)";
-
-			// Create the clone
-			auto new_ent = reg.create_entity();
-
-			// --- Tag Component ---
-			new_ent.add_component<me::components::TagComponent>({ new_name });
-
-			// --- Copy 3D Components ---
-			if (auto* t = reg.try_get_component<me::components::TransformComponent>(selected))
-				new_ent.add_component<me::components::TransformComponent>(*t);
-
-			if (auto* s = reg.try_get_component<me::components::Shape3DComponent>(selected))
-				new_ent.add_component<me::components::Shape3DComponent>(*s);
-
-			if (auto* m = reg.try_get_component<me::components::Model3DComponent>(selected))
-				new_ent.add_component<me::components::Model3DComponent>(*m);
-
-			if (auto* l = reg.try_get_component<me::components::LightComponent>(selected))
-				new_ent.add_component<me::components::LightComponent>(*l);
-
-			if (auto* dl = reg.try_get_component<me::components::DirectionalLightComponent>(selected))
-				new_ent.add_component<me::components::DirectionalLightComponent>(*dl);
-
-			if (auto* c = reg.try_get_component<me::components::CameraComponent>(selected))
-				new_ent.add_component<me::components::CameraComponent>(*c);
-
-			// --- Copy 2D Components ---
-			if (auto* s2 = reg.try_get_component<me::components::Shape2DComponent>(selected))
-				new_ent.add_component<me::components::Shape2DComponent>(*s2);
-
-			if (auto* sp = reg.try_get_component<me::components::SpriteComponent>(selected))
-				new_ent.add_component<me::components::SpriteComponent>(*sp);
-
-			if (auto* c2 = reg.try_get_component<me::components::Camera2DComponent>(selected))
-				new_ent.add_component<me::components::Camera2DComponent>(*c2);
-
-			// --- Copy Scripts ---
-			if (auto* sc = reg.try_get_component<me::components::ScriptComponent>(selected)) {
-				me::components::ScriptComponent new_sc;
-				for (const auto& script : sc->scripts) {
-					new_sc.scripts.push_back({ script.path });
+			// 5. Delete selected entity
+			if (selected != 0xFFFFFFFF && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+				auto& reg = me::get_registry();
+				if (auto* t = reg.try_get_component<me::components::TransformComponent>(selected)) {
+					// Unlink from parent
+					if (t->parent != me::entity::null) {
+						if (auto* p = reg.try_get_component<me::components::TransformComponent>(t->parent))
+							p->remove_child(selected);
+					}
+					// Orphan all children so they become root entities
+					for (auto child_id : t->children) {
+						if (auto* ct = reg.try_get_component<me::components::TransformComponent>(child_id))
+							ct->parent = me::entity::null;
+					}
 				}
-				new_ent.add_component<me::components::ScriptComponent>(new_sc);
+				reg.destroy_entity(selected);
+				m_HierarchyPanel.set_selected_entity(0xFFFFFFFF);
 			}
 
-			// Automatically select the newly duplicated entity
-			m_HierarchyPanel.set_selected_entity(new_ent.get_id());
-		}
+			// 6. Duplicate entity (Ctrl + D)
+			if (selected != 0xFFFFFFFF && ctrl && ImGui::IsKeyPressed(ImGuiKey_D)) {
+				auto& reg = me::get_registry();
 
-		// 5. Frame Selected Entity (F key)
-		if (selected != 0xFFFFFFFF && ImGui::IsKeyPressed(ImGuiKey_F) && m_ViewportPanel.is_focused()) {
-			auto* transform = me::get_registry().try_get_component<me::components::TransformComponent>(selected);
-			if (transform) {
-				// Snap the camera's target directly to the entity's position
-				m_EditorCamera.target = { transform->position.x, transform->position.y, transform->position.z };
+				auto old_tag = reg.try_get_component<me::components::TagComponent>(selected);
+				std::string new_name = old_tag ? (old_tag->name + " (Clone)") : "Entity (Clone)";
 
-				// Teleport the camera
-				float distance = 10.0f;
-				m_EditorCameraTransform.position.x = transform->position.x - std::sin(m_EditorCameraTransform.rotation.y * (PI / 180.0f)) * distance;
-				m_EditorCameraTransform.position.y = transform->position.y + 5.0f; // Move it 5 units above the object
-				m_EditorCameraTransform.position.z = transform->position.z - std::cos(m_EditorCameraTransform.rotation.y * (PI / 180.0f)) * distance;
+				auto new_ent = reg.create_entity();
+				new_ent.add_component<me::components::TagComponent>({ new_name });
 
-				m_EditorCameraTransform.rotation.x = -25.0f;
+				if (auto* t = reg.try_get_component<me::components::TransformComponent>(selected))
+					new_ent.add_component<me::components::TransformComponent>(*t);
+				if (auto* s = reg.try_get_component<me::components::Shape3DComponent>(selected))
+					new_ent.add_component<me::components::Shape3DComponent>(*s);
+				if (auto* m = reg.try_get_component<me::components::Model3DComponent>(selected))
+					new_ent.add_component<me::components::Model3DComponent>(*m);
+				if (auto* l = reg.try_get_component<me::components::LightComponent>(selected))
+					new_ent.add_component<me::components::LightComponent>(*l);
+				if (auto* dl = reg.try_get_component<me::components::DirectionalLightComponent>(selected))
+					new_ent.add_component<me::components::DirectionalLightComponent>(*dl);
+				if (auto* c = reg.try_get_component<me::components::CameraComponent>(selected))
+					new_ent.add_component<me::components::CameraComponent>(*c);
+				if (auto* s2 = reg.try_get_component<me::components::Shape2DComponent>(selected))
+					new_ent.add_component<me::components::Shape2DComponent>(*s2);
+				if (auto* sp = reg.try_get_component<me::components::SpriteComponent>(selected))
+					new_ent.add_component<me::components::SpriteComponent>(*sp);
+				if (auto* c2 = reg.try_get_component<me::components::Camera2DComponent>(selected))
+					new_ent.add_component<me::components::Camera2DComponent>(*c2);
+				if (auto* sc = reg.try_get_component<me::components::ScriptComponent>(selected)) {
+					me::components::ScriptComponent new_sc;
+					for (const auto& script : sc->scripts) new_sc.scripts.push_back({ script.path });
+					new_ent.add_component<me::components::ScriptComponent>(new_sc);
+				}
+
+				m_HierarchyPanel.set_selected_entity(new_ent.get_id());
 			}
 		}
 
-		// 6. ImGuizmo Tool Switching (Q, W, R, S)
-		// Only trigger if we aren't flying the camera and aren't typing in a text box
-		if (!m_IsFlying && !ImGui::GetIO().WantTextInput && m_ViewportPanel.is_focused()) {
-			if (ImGui::IsKeyPressed(ImGuiKey_Q)) m_GizmoType = -1; // Hide
+		// Viewport-focused shortcuts — only when the viewport has focus and we're not flying
+		if (m_ViewportPanel.is_focused() && !m_IsFlying && !wantText) {
+
+			// 7. Frame selected entity (F)
+			if (selected != 0xFFFFFFFF && ImGui::IsKeyPressed(ImGuiKey_F)) {
+				auto* transform = me::get_registry().try_get_component<me::components::TransformComponent>(selected);
+				if (transform) {
+					m_EditorCamera.target = { transform->position.x, transform->position.y, transform->position.z };
+					float distance = 10.0f;
+					m_EditorCameraTransform.position.x = transform->position.x - std::sin(m_EditorCameraTransform.rotation.y * (PI / 180.0f)) * distance;
+					m_EditorCameraTransform.position.y = transform->position.y + 5.0f;
+					m_EditorCameraTransform.position.z = transform->position.z - std::cos(m_EditorCameraTransform.rotation.y * (PI / 180.0f)) * distance;
+					m_EditorCameraTransform.rotation.x = -25.0f;
+				}
+			}
+
+			// 8. Gizmo tool switching (Q / W / R / S)
+			if (ImGui::IsKeyPressed(ImGuiKey_Q)) m_GizmoType = -1;
 			if (ImGui::IsKeyPressed(ImGuiKey_W)) m_GizmoType = ImGuizmo::TRANSLATE;
 			if (ImGui::IsKeyPressed(ImGuiKey_R)) m_GizmoType = ImGuizmo::ROTATE;
 			if (ImGui::IsKeyPressed(ImGuiKey_S)) m_GizmoType = ImGuizmo::SCALE;
@@ -327,6 +377,7 @@ namespace editor {
 		me::fs::create_directory("game://scripts");
 		me::fs::create_directory("game://models");
 		me::fs::create_directory("game://textures");
+		me::fs::create_directory("game://audio");
 		load_project(path);
 	}
 
@@ -370,6 +421,7 @@ namespace editor {
 
 	void EditorApp::on_play() {
 		m_SceneState = SceneState::Play;
+		me::logger::info("Mode set to: PLAYING");
 		me::scene_manager::save("game://scenes/.temp_play.json");
 
 		// Start the physics simulation and load the bodies
@@ -377,17 +429,33 @@ namespace editor {
 
 		me::set_playing(true);
 		me::get_event_bus().publish<me::events::PlayStateChangedEvent>(true);
-		me::logger::info("Mode set to: PLAYING");
 	}
 
 	void EditorApp::on_stop() {
 		m_SceneState = SceneState::Edit;
+		me::logger::info("Mode set to: EDIT");
 		me::set_playing(false);
 		me::get_event_bus().publish<me::events::PlayStateChangedEvent>(false);
-		me::logger::info("Mode set to: EDIT");
 
 		// Destroy all live physics bodies
 		me::physics::on_stop();
+
+		// ==========================================
+		// SILENCE ALL ACTIVE AUDIO
+		// ==========================================
+		auto& registry = me::get_registry();
+
+		// Stop any looping music streams
+		auto& music_pool = registry.view<me::components::BackgroundMusicComponent>();
+		for (size_t i = 0; i < music_pool.size(); ++i) {
+			me::audio::stop_music(music_pool.components[i].stream);
+		}
+
+		// Stop any long-playing sound effects
+		auto& sfx_pool = registry.view<me::components::AudioSourceComponent>();
+		for (size_t i = 0; i < sfx_pool.size(); ++i) {
+			me::audio::stop(sfx_pool.components[i].clip);
+		}
 
 		me::scene_manager::load("game://scenes/.temp_play.json");
 		me::fs::remove("game://scenes/.temp_play.json");
@@ -446,8 +514,15 @@ namespace editor {
 
 			// --- Layout Menu ---
 			if (ImGui::BeginMenu("Layout")) {
-				if (ImGui::MenuItem("Save Custom Layout")) ImGui::SaveIniSettingsToDisk("assets/custom_layout.ini");
-				if (ImGui::MenuItem("Load Custom Layout")) ImGui::LoadIniSettingsFromDisk("assets/custom_layout.ini");
+
+				if (ImGui::MenuItem("Save Custom Layout")) {
+					m_WantsToSaveLayout = true; // Tell the engine to save it later
+				}
+
+				if (ImGui::MenuItem("Load Custom Layout")) {
+					m_WantsToLoadLayout = true; // Tell the engine to load it later
+				}
+
 				ImGui::EndMenu();
 			}
 

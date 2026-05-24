@@ -8,8 +8,9 @@
 #include <mini-engine-raylib/core/application.hpp>
 #include <mini-engine-raylib/ecs/components.hpp>
 
-// --- Our Custom Panels ---
+// --- Panels ---
 #include "editor/panels/scene_hierarchy_panel.hpp"
+#include "editor/panels/inspector_panel.hpp"
 #include "editor/panels/content_browser_panel.hpp"
 #include "editor/panels/console_panel.hpp"
 #include "editor/panels/viewport_panel.hpp"
@@ -67,7 +68,6 @@ namespace editor {
 		int m_GizmoType = 7; // ImGuizmo::TRANSLATE
 
 		// --- Camera ---
-		//Camera3D m_EditorCamera = { 0 };
 		me::components::CameraComponent m_EditorCamera;
 		me::components::TransformComponent m_EditorCameraTransform = {
 			{0.0f, 5.0f, 10.0f},
@@ -81,10 +81,15 @@ namespace editor {
 
 		// --- UI Panels ---
 		SceneHierarchyPanel m_HierarchyPanel;
+		InspectorPanel m_InspectorPanel;
 		ContentBrowserPanel m_BrowserPanel;
 		ConsolePanel m_ConsolePanel;
 		ViewportPanel m_ViewportPanel;
 		ProjectHubPanel m_HubPanel;
+
+		// --- Layout ---
+		bool m_WantsToSaveLayout = false;
+		bool m_WantsToLoadLayout = false;
 	};
 
 } // namespace editor

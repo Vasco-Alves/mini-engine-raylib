@@ -1,12 +1,11 @@
 #include "mini-engine-raylib/audio/audio.hpp"
-
 #include <unordered_map>
 #include <string>
 #include <cstdint>
 #include <utility>
 #include <filesystem>
-
 #include <raylib.h>
+#include "mini-engine-raylib/core/vfs.hpp"
 
 namespace fs = std::filesystem;
 
@@ -101,9 +100,11 @@ namespace me::audio {
 		const std::string key = uri;
 		auto it = s_sound_by_path.find(key);
 		if (it == s_sound_by_path.end()) {
-			fs::path p = fs::current_path() / "assets" / key;
-			fs::create_directories(p.parent_path());
-			::Sound s = LoadSound(p.string().c_str());
+
+			// VFS FIX: Resolve the physical path dynamically!
+			std::string physical_path = me::vfs::resolve(key);
+			::Sound s = LoadSound(physical_path.c_str());
+
 			if (s.stream.buffer == nullptr && s.frameCount == 0) return out;
 
 			SoundRec rec{ s, 1 };
@@ -135,12 +136,13 @@ namespace me::audio {
 		s_sound_handle_to.erase(itPath);
 	}
 
-	void play(SoundId id, float volume, float pitch) {
+	void play(SoundId id, float volume, float pitch, float pan) {
 		const ::Sound* s = get_native(id);
 		if (!s) return;
 		::Sound copy = *s;
 		SetSoundVolume(copy, volume);
 		SetSoundPitch(copy, pitch);
+		SetSoundPan(copy, pan);
 		PlaySound(copy);
 	}
 
@@ -164,9 +166,11 @@ namespace me::audio {
 		const std::string key = uri;
 		auto it = s_music_by_path.find(key);
 		if (it == s_music_by_path.end()) {
-			fs::path p = fs::current_path() / "assets" / key;
-			fs::create_directories(p.parent_path());
-			::Music m = LoadMusicStream(p.string().c_str());
+
+			// VFS FIX: Resolve the physical path dynamically!
+			std::string physical_path = me::vfs::resolve(key);
+			::Music m = LoadMusicStream(physical_path.c_str());
+
 			MusicRec rec{ m, 1, false };
 			s_music_by_path.emplace(key, rec);
 			out.handle = s_next_music_handle++;

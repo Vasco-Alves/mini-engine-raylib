@@ -27,7 +27,10 @@ namespace me::physics {
 	// Renders the collision shapes as wireframes using Raylib's rlgl. Must be called inside a BeginMode3D() block
 	void draw_debug(me::Registry& registry);
 
-	// Pushes a RigidBody by directly setting its linear velocity
+	// Pushes a RigidBody by directly setting its linear velocity (Ignores rotation)
 	void set_linear_velocity(me::entity::entity_id e, float x, float y, float z);
+
+	// Pushes a RigidBody by directly setting its linear velocity
+	void set_local_linear_velocity(me::entity::entity_id e, float x, float y, float z);
 
 } // namespace me::physics

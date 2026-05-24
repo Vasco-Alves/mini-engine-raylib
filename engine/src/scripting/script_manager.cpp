@@ -3,6 +3,7 @@
 #include "mini-engine-raylib/core/engine.hpp"
 #include "mini-engine-raylib/core/logger.hpp"
 #include "mini-engine-raylib/ecs/components.hpp"
+#include "mini-engine-raylib/ecs/audio_components.hpp"
 #include "mini-engine-raylib/systems/physics_system.hpp"
 #include "mini-engine-raylib/input/input.hpp"
 #include <mini-ecs/registry.hpp>
@@ -74,17 +75,45 @@ namespace me::scripting {
 		// 3. ENTITY BINDINGS
 		// ===================================================================
 		s_State->new_usertype<me::Entity>("Entity",
-			sol::no_constructor, // Lua scripts receive entities from the Engine, they don't spawn raw ones.
+			sol::no_constructor,
 			"is_valid", &me::Entity::is_valid,
 			"destroy", &me::Entity::destroy,
 
 			"get_transform", [](me::Entity& e) -> me::components::TransformComponent* {
+				// Protect against dead entities
+				if (!e.is_valid()) {
+					me::logger::error("Lua attempted to access a destroyed Entity!");
+					return nullptr;
+				}
 				return e.try_get_component<me::components::TransformComponent>();
 			},
 
-			// The Physics Velocity hook!
 			"set_velocity", [](me::Entity& ent, float x, float y, float z) {
+				if (!ent.is_valid()) return;
 				me::physics::set_linear_velocity(ent.get_id(), x, y, z);
+			},
+
+			"set_local_velocity", [](me::Entity& ent, float x, float y, float z) {
+				if (!ent.is_valid()) return;
+				me::physics::set_local_linear_velocity(ent.get_id(), x, y, z);
+			},
+
+			"add_offset", [](me::Entity& ent, float x, float y, float z) {
+				if (!ent.is_valid()) return;
+				auto* t = ent.try_get_component<me::components::TransformComponent>();
+				if (t) {
+					t->position.x += x;
+					t->position.y += y;
+					t->position.z += z;
+				}
+			},
+
+			"play_sound", [](me::Entity& ent) {
+				if (!ent.is_valid()) return;
+				auto* audio = ent.try_get_component<me::components::AudioSourceComponent>();
+				if (audio) {
+					audio->trigger_play = true;
+				}
 			}
 		);
 

@@ -1,6 +1,9 @@
 #pragma once
 
 #include <raylib.h>
+#include <raymath.h>
+#include <vector>
+#include <algorithm> 
 
 #include "mini-engine-raylib/render/color.hpp"
 #include "mini-engine-raylib/assets/assets.hpp"
@@ -15,18 +18,35 @@ namespace me::components {
 
 	struct TransformComponent {
 		Vector3 position = { 0.0f, 0.0f, 0.0f };
-		Vector3 rotation = { 0.0f, 0.0f, 0.0f }; // Euler angles in Degrees
+		Vector3 rotation = { 0.0f, 0.0f, 0.0f }; // Euler angles in Degrees (for display/inspector)
 		Vector3 scale = { 1.0f, 1.0f, 1.0f };
 
+		// Quaternion is the source of truth for rotation.
+		// - The gizmo writes here directly (no Euler round-trip, no drift).
+		// - The inspector writes to `rotation` (Euler), which the transform system
+		//   syncs back into this quaternion when it detects a change.
+		Quaternion rotation_quat = { 0.0f, 0.0f, 0.0f, 1.0f }; // Identity
+
+		// --- HIERARCHY (SCENE GRAPH) ---
+		me::entity::entity_id parent = me::entity::null;
+		std::vector<me::entity::entity_id> children;
+
+		void add_child(me::entity::entity_id child) {
+			children.push_back(child);
+		}
+
+		void remove_child(me::entity::entity_id child) {
+			children.erase(std::remove(children.begin(), children.end(), child), children.end());
+		}
+
 		// --- MATRIX CACHING ---
-		// Starts as an Identity Matrix (no movement)
 		Matrix model_matrix = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
 
 		Vector3 last_position = { 0.0f, 0.0f, 0.0f };
 		Vector3 last_rotation = { 0.0f, 0.0f, 0.0f };
 		Vector3 last_scale = { 0.0f, 0.0f, 0.0f };
 
-		bool is_dirty = true; // Force calculate on frame 1
+		bool is_dirty = true;
 	};
 
 	struct LightComponent {

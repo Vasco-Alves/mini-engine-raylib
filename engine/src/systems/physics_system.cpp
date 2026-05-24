@@ -326,8 +326,6 @@ namespace me::physics {
 		}
 	}
 
-	// ... (Keep your other physics functions) ...
-
 	void set_linear_velocity(me::entity::entity_id e, float x, float y, float z) {
 		if (!s_PhysicsSystem) return; // Safety check in case we aren't in Play Mode
 
@@ -346,6 +344,40 @@ namespace me::physics {
 
 				// 2. Apply the velocity
 				body_interface.SetLinearVelocity(id, JPH::Vec3(x, y, z));
+			}
+		}
+	}
+
+	void set_local_linear_velocity(me::entity::entity_id e, float x, float y, float z) {
+		if (!s_PhysicsSystem) return;
+
+		auto& reg = me::get_registry();
+		auto* rb = reg.try_get_component<me::components::RigidBodyComponent>(e);
+		auto* t = reg.try_get_component<me::components::TransformComponent>(e);
+
+		if (rb && t && rb->runtime_body_id != 0xFFFFFFFF) {
+			JPH::BodyInterface& body_interface = s_PhysicsSystem->GetBodyInterface();
+			JPH::BodyID id(rb->runtime_body_id);
+
+			if (body_interface.IsAdded(id)) {
+				// Extract the entity's basis vectors from its world matrix (column-major):
+				//   Forward = col 2 = (m2, m6, m10)  — local +Z
+				//   Right   = col 0 = (m0, m4, m8)   — local +X
+				//   Up      = col 1 = (m1, m5, m9)   — local +Y
+				// Normalize them to strip out any scale that's baked into the matrix.
+				Vector3 right = Vector3Normalize({ t->model_matrix.m0,  t->model_matrix.m4,  t->model_matrix.m8 });
+				Vector3 up = Vector3Normalize({ t->model_matrix.m1,  t->model_matrix.m5,  t->model_matrix.m9 });
+				Vector3 forward = Vector3Normalize({ t->model_matrix.m2,  t->model_matrix.m6,  t->model_matrix.m10 });
+
+				// Build the world-space velocity by combining the local axes
+				Vector3 world_vel = {
+					right.x * x + up.x * y + forward.x * z,
+					right.y * x + up.y * y + forward.y * z,
+					right.z * x + up.z * y + forward.z * z,
+				};
+
+				body_interface.ActivateBody(id);
+				body_interface.SetLinearVelocity(id, JPH::Vec3(world_vel.x, world_vel.y, world_vel.z));
 			}
 		}
 	}

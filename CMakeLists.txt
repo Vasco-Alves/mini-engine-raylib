@@ -38,7 +38,7 @@ set(TARGET_HELLO_WORLD OFF CACHE BOOL "Don't build Jolt hello world" FORCE)
 set(TARGET_PERFORMANCE_TEST OFF CACHE BOOL "Don't build Jolt performance test" FORCE)
 set(USE_AVX2 ON CACHE BOOL "Use AVX2 instructions for physics math" FORCE)
 
-add_subdirectory(vendor/JoltPhysics/Build)
+add_subdirectory(vendor/joltphysics/Build)
 
 # ==========================================
 # INTERNAL TARGETS

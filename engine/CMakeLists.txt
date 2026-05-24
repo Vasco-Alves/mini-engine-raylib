@@ -19,7 +19,7 @@ set(SOURCES
     "src/core/vfs.cpp" 
     "src/core/logger.cpp"
     "src/systems/physics_system.cpp" 
-)
+  "src/systems/audio_system.cpp")
 
 # 3. Create the Library
 add_library(engine STATIC ${SOURCES})

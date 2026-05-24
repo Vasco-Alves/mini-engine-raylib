@@ -6,7 +6,7 @@ int main() {
 	config.title = "Mini Engine Raylib | Editor";
 	config.width = 2000;
 	config.height = 1200;
-	config.vsync = true;
+	config.vsync = false;
 
 	editor::EditorApp app;
 	me::run(app, config);
