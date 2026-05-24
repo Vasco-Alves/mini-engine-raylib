@@ -5,7 +5,6 @@
 Originally built as a lightweight wrapper over [Raylib](https://www.raylib.com/), the engine has evolved into a full-featured development environment. It features a custom Entity-Component-System (ECS), a AAA physics backend, live Lua scripting, and a complete UI editor, making it an ideal platform for rapid prototyping and learning advanced engine architecture.
 
 ![MiniEngine Editor](docs/images/editor_hero.png)  
-*(Add a screenshot of your full editor layout here, showing the hierarchy, inspector, and 3D lit viewport)*
 
 ## Core Features
 
@@ -30,8 +29,8 @@ Originally built as a lightweight wrapper over [Raylib](https://www.raylib.com/)
 This project uses Git submodules for core engine components. You **must** clone it recursively to fetch all the required source code.
 
 ```bash
-git clone --recursive https://github.com/Vasco-Alves/mini-engine-raylib.git(https://github.com/YOUR_USERNAME/MiniEngineRaylib.git)
-cd MiniEngineRaylib
+git clone --recursive https://github.com/Vasco-Alves/mini-engine-raylib.git
+cd mini-engine-raylib
 ```
 
 *(If you already cloned it normally, run `git submodule update --init --recursive` to pull the missing files).*
