@@ -1,7 +1,3 @@
-# 1. Find Dependencies
-find_package(raylib CONFIG REQUIRED)
-find_package(nlohmann_json CONFIG REQUIRED)
-
 # 2. Define Source Files
 set(SOURCES
     "src/assets/assets.cpp"
@@ -45,6 +41,6 @@ target_include_directories(engine PUBLIC
 
 # 5. Link Dependencies
 target_link_libraries(engine 
-    PRIVATE raylib glfw
+    PRIVATE raylib 
     PUBLIC nlohmann_json::nlohmann_json mini-ecs lua Jolt
 )
