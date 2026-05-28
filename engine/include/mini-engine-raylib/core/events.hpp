@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include <vector>
 #include <typeindex>
+#include <cstdint>
 
 #include "mini-engine-raylib/core/logger.hpp"
 

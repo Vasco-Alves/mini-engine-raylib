@@ -10,7 +10,7 @@ add_executable(editor ${EDITOR_SOURCES})
 # Tell the editor where its own headers and ImGuizmo are
 target_include_directories(editor PRIVATE 
     "include"
-    "${CMAKE_SOURCE_DIR}/vendor/ImGuizmo"
+    "${CMAKE_SOURCE_DIR}/vendor/imguizmo"
 )
 
 # Link the Engine, ImGui, and Raylib

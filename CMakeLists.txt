@@ -25,6 +25,11 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # ==========================================
 # VENDOR LIBRARIES
 # ==========================================
+# Find Dependencies
+find_package(raylib CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+find_package(glfw3 CONFIG REQUIRED)
+
 add_subdirectory(vendor/mini-ecs)
 add_subdirectory(vendor/lua)
 add_subdirectory(vendor/imgui)
@@ -48,13 +53,13 @@ add_subdirectory(vendor/joltphysics/Build)
 add_subdirectory(engine)
 add_subdirectory(editor)
 
-# If running "MiniEngine" directly (Dev Mode) build sandbox
-if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR) 
-    option(BUILD_SANDBOX "Build the sandbox application" ON)
-    if (BUILD_SANDBOX)
-        add_subdirectory(sandbox)
-    endif()
-# Being included by another game (User Mode)
-else()
-    message(STATUS "MiniEngine included as a library. Sandbox disabled.")
-endif()
+# # If running "MiniEngine" directly (Dev Mode) build sandbox
+# if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR) 
+#     option(BUILD_SANDBOX "Build the sandbox application" ON)
+#     if (BUILD_SANDBOX)
+#         add_subdirectory(sandbox)
+#     endif()
+# # Being included by another game (User Mode)
+# else()
+#     message(STATUS "MiniEngine included as a library. Sandbox disabled.")
+# endif()
