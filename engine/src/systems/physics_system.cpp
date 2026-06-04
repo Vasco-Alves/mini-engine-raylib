@@ -157,8 +157,8 @@ namespace me::physics {
 
 				JPH::ShapeRefC shape;
 
+				// --- BOX COLLIDER MATH ---
 				if (box_col) {
-					// --- BOX COLLIDER MATH ---
 					float ext_x = std::abs(box_col->half_extents.x * transform->scale.x);
 					float ext_y = std::abs(box_col->half_extents.y * transform->scale.y);
 					float ext_z = std::abs(box_col->half_extents.z * transform->scale.z);
@@ -176,8 +176,10 @@ namespace me::physics {
 						continue;
 					}
 					shape = shape_result.Get();
-				} else if (sphere_col) {
-					// --- SPHERE COLLIDER MATH ---
+				}
+
+				// --- SPHERE COLLIDER MATH ---
+				else if (sphere_col) {
 					float scaled_radius = std::abs(sphere_col->radius * transform->scale.x);
 
 					if (scaled_radius <= 0.001f) {
@@ -219,7 +221,6 @@ namespace me::physics {
 				}
 
 				JPH::Body* body = body_interface.CreateBody(body_settings);
-
 				if (body == nullptr) {
 					me::logger::error("Jolt returned a null body for Entity " + std::to_string(e));
 					continue;
@@ -231,7 +232,6 @@ namespace me::physics {
 		}
 
 		s_PhysicsSystem->OptimizeBroadPhase();
-		me::logger::info("Physics Simulation Started");
 	}
 
 	void on_stop() {
@@ -242,8 +242,6 @@ namespace me::physics {
 		delete s_BPLayerInterface; s_BPLayerInterface = nullptr;
 		delete s_JobSystem; s_JobSystem = nullptr;
 		delete s_TempAllocator; s_TempAllocator = nullptr;
-
-		me::logger::info("Physics Simulation Stopped");
 	}
 
 	void update(me::Registry& registry, float dt) {
@@ -327,7 +325,7 @@ namespace me::physics {
 	}
 
 	void set_linear_velocity(me::entity::entity_id e, float x, float y, float z) {
-		if (!s_PhysicsSystem) return; // Safety check in case we aren't in Play Mode
+		if (!s_PhysicsSystem) return;
 
 		auto& reg = me::get_registry();
 		auto* rb = reg.try_get_component<me::components::RigidBodyComponent>(e);
@@ -339,10 +337,7 @@ namespace me::physics {
 
 			// Ensure the body still exists in the physics world
 			if (body_interface.IsAdded(id)) {
-				// 1. Wake the body up (in case it fell asleep sitting on the floor)
 				body_interface.ActivateBody(id);
-
-				// 2. Apply the velocity
 				body_interface.SetLinearVelocity(id, JPH::Vec3(x, y, z));
 			}
 		}

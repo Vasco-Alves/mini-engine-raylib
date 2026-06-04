@@ -12,4 +12,6 @@ namespace me::camera {
 
 	// Updates raw components directly (Used by the Editor)
 	void update_editor_camera(me::components::TransformComponent& t, me::components::CameraComponent& cam, float dt);
+
+	void orbit_editor_camera(me::components::TransformComponent& t, me::components::CameraComponent& cam, const Vector3& orbit_target, float dt);
 }

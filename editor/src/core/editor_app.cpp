@@ -23,7 +23,6 @@
 #include <mini-engine-raylib/systems/physics_system.hpp>
 #include <mini-engine-raylib/systems/audio_system.hpp>
 
-
 namespace editor {
 
 	void EditorApp::on_start() {
@@ -39,15 +38,7 @@ namespace editor {
 		ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 		apply_theme();
 
-		// Subscribe to Events
-		auto& bus = me::get_event_bus();
-		bus.subscribe<me::events::LogEvent>([](auto* e) { ConsolePanel::add_log(e->message, e->level); });
-		bus.subscribe<me::events::SceneLoadedEvent>([this](auto* e) {
-			if (e->filepath.find(".temp_play.json") == std::string::npos) {
-				m_CurrentScenePath = e->filepath;
-			}
-			});
-		bus.subscribe<me::events::EntitySelectedEvent>([this](auto* e) { m_HierarchyPanel.set_selected_entity(e->entity_id); });
+		subcribe_events();
 
 		// Wire up the Project Hub Callbacks
 		m_HubPanel.on_project_open = [this](const std::filesystem::path& p) { load_project(p); };
@@ -65,6 +56,27 @@ namespace editor {
 		me::render::shutdown();
 		m_ViewportPanel.on_shutdown();
 		rlImGuiShutdown();
+	}
+
+	void EditorApp::subcribe_events() {
+		auto& bus = me::get_event_bus();
+		bus.subscribe<me::events::LogEvent>([](auto* e) { ConsolePanel::add_log(e->message, e->level); });
+		bus.subscribe<me::events::SceneLoadedEvent>([this](auto* e) {
+			if (e->filepath.find(".temp_play.json") == std::string::npos) {
+				m_CurrentScenePath = e->filepath;
+			}
+			});
+		bus.subscribe<me::events::EntitySelectedEvent>([this](auto* e) {
+			m_HierarchyPanel.set_selected_entity(e->entity_id);
+
+			auto& reg = me::get_registry();
+			if (auto* t = reg.try_get_component<me::components::TransformComponent>(e->entity_id)) {
+				m_OrbitTarget = { t->position.x, t->position.y, t->position.z };
+			}
+			});
+
+		bus.subscribe<me::events::PlayStateChangedEvent>([](auto* e) {});
+		bus.subscribe<me::events::PauseStateChangedEvent>([](auto* e) {});
 	}
 
 	void EditorApp::on_resize(int width, int height) {}
@@ -100,7 +112,12 @@ namespace editor {
 		}
 
 		if (m_IsFlying) {
-			me::camera::update_editor_camera(m_EditorCameraTransform, m_EditorCamera, dt);
+			bool orbiting = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
+			if (orbiting)
+				me::camera::orbit_editor_camera(m_EditorCameraTransform, m_EditorCamera, m_OrbitTarget, dt);
+			else
+				me::camera::update_editor_camera(m_EditorCameraTransform, m_EditorCamera, dt);
+
 			if (me::input::action_released("MouseRight")) {
 				m_IsFlying = false;
 				me::input::unlock_cursor();
@@ -121,7 +138,7 @@ namespace editor {
 		poll_shortcuts();
 
 		// ==========================================
-		// 3D AUDIO SPATIAL UPDATE (Moved outside the physics if-statement!)
+		// 3D AUDIO SPATIAL UPDATE
 		// ==========================================
 		// Calculate the Editor Camera's forward vector
 		Vector3 editor_pos = { m_EditorCameraTransform.position.x, m_EditorCameraTransform.position.y, m_EditorCameraTransform.position.z };
@@ -238,14 +255,22 @@ namespace editor {
 		draw_menu_bar();
 		draw_toolbar();
 
-		// Draw Panels
+		// --- Draw Panels ---
 		m_HierarchyPanel.on_imgui_render();
-		m_InspectorPanel.on_imgui_render(&me::get_registry(), m_HierarchyPanel.get_selected_entity());
+		me::Entity selected_entity = m_HierarchyPanel.get_selected_entity();
+
+		// Keep orbit target in sync with whatever is selected
+		if (selected_entity.is_valid()) {
+			auto* t = selected_entity.try_get_component<me::components::TransformComponent>();
+			if (t) m_OrbitTarget = { t->position.x, t->position.y, t->position.z };
+		}
+
+		m_InspectorPanel.on_imgui_render(selected_entity, m_CommandHistory);
 		m_BrowserPanel.on_imgui_render();
 		m_ConsolePanel.on_imgui_render();
 
 		// Pass the exact camera and selection state down into the Viewport
-		m_ViewportPanel.on_imgui_render(m_EditorCameraTransform, m_EditorCamera, m_HierarchyPanel.get_selected_entity(), m_GizmoType);
+		m_ViewportPanel.on_imgui_render(m_EditorCameraTransform, m_EditorCamera, selected_entity, m_GizmoType, m_CommandHistory);
 
 		draw_modals();
 
@@ -260,21 +285,35 @@ namespace editor {
 		// Global shortcuts — always fire (unless typing in a text box)
 		if (!wantText) {
 
-			// 1. Save Scene (Ctrl + S)
+			// Save Scene (Ctrl + S)
 			if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
 				save_scene();
 				me::logger::info("Saved scene in " + m_CurrentScenePath);
 			}
 
-			// 2. New Scene (Ctrl + N)
+			// New Scene (Ctrl + N)
 			if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N)) {
 				m_ShowNewSceneModal = true;
 				strncpy(m_NewSceneInput, "my_new_scene", sizeof(m_NewSceneInput));
 			}
 
-			// 3. Play / Stop toggle (Ctrl + P)
+			// Play / Stop toggle (Ctrl + P)
 			if (ctrl && ImGui::IsKeyPressed(ImGuiKey_P)) {
-				if (m_SceneState == SceneState::Edit) { on_play(); me::set_paused(false); } else                                    on_stop();
+				if (m_SceneState == SceneState::Edit) {
+					on_play();
+					me::set_paused(false);
+				} else
+					on_stop();
+			}
+
+			// Undo (Crtl + Z)
+			if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_Z)) {
+				m_CommandHistory.Undo();
+			}
+
+			// Redo (Crtl + Y)
+			if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_Y)) {
+				m_CommandHistory.Redo();
 			}
 		}
 
@@ -341,15 +380,11 @@ namespace editor {
 
 				m_HierarchyPanel.set_selected_entity(new_ent.get_id());
 			}
-		}
 
-		// Viewport-focused shortcuts — only when the viewport has focus and we're not flying
-		if (m_ViewportPanel.is_focused() && !m_IsFlying && !wantText) {
-
-			// 7. Frame selected entity (F)
 			if (selected != 0xFFFFFFFF && ImGui::IsKeyPressed(ImGuiKey_F)) {
 				auto* transform = me::get_registry().try_get_component<me::components::TransformComponent>(selected);
 				if (transform) {
+					m_OrbitTarget = { transform->position.x, transform->position.y, transform->position.z };
 					m_EditorCamera.target = { transform->position.x, transform->position.y, transform->position.z };
 					float distance = 10.0f;
 					m_EditorCameraTransform.position.x = transform->position.x - std::sin(m_EditorCameraTransform.rotation.y * (PI / 180.0f)) * distance;
@@ -358,6 +393,10 @@ namespace editor {
 					m_EditorCameraTransform.rotation.x = -25.0f;
 				}
 			}
+		}
+
+		// Viewport-focused shortcuts — only when the viewport has focus and we're not flying
+		if (m_ViewportPanel.is_focused() && !m_IsFlying && !wantText) {
 
 			// 8. Gizmo tool switching (Q / W / R / S)
 			if (ImGui::IsKeyPressed(ImGuiKey_Q)) m_GizmoType = -1;
@@ -523,18 +562,6 @@ namespace editor {
 					m_WantsToLoadLayout = true; // Tell the engine to load it later
 				}
 
-				ImGui::EndMenu();
-			}
-
-			// --- View Menu ---
-			if (ImGui::BeginMenu("View")) {
-
-				// Lighting Toggle Checkbox
-				bool lighting = me::render::is_lighting_enabled();
-				if (ImGui::MenuItem("Lit Mode (Lighting)", nullptr, &lighting)) {
-					me::render::set_lighting_enabled(lighting);
-				}
-
 				ImGui::Separator();
 				ImGui::TextDisabled("UI Scale");
 				ImGui::Separator();
@@ -548,6 +575,18 @@ namespace editor {
 						ImGui::GetIO().FontGlobalScale = scales[i];
 						save_engine_config();
 					}
+				}
+
+				ImGui::EndMenu();
+			}
+
+			// --- View Menu ---
+			if (ImGui::BeginMenu("View")) {
+
+				// Lighting Toggle Checkbox
+				bool lighting = me::render::is_lighting_enabled();
+				if (ImGui::MenuItem("Lit Mode (Lighting)", nullptr, &lighting)) {
+					me::render::set_lighting_enabled(lighting);
 				}
 
 				ImGui::EndMenu();

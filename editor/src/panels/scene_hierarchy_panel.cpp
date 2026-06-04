@@ -61,8 +61,11 @@ namespace editor {
 					auto* old_parent = m_Context->try_get_component<me::components::TransformComponent>(dropped_transform->parent);
 					if (old_parent) {
 						old_parent->remove_child(dropped_entity);
-						// MATH FIX: Convert Local Space back to World Space so it doesn't teleport!
-						dropped_transform->position = Vector3Transform(dropped_transform->position, old_parent->model_matrix);
+						dropped_transform->position = {
+							dropped_transform->model_matrix.m12,
+							dropped_transform->model_matrix.m13,
+							dropped_transform->model_matrix.m14
+						};
 					}
 
 					dropped_transform->parent = me::entity::null;
@@ -144,7 +147,7 @@ namespace editor {
 							dropped_transform->model_matrix.m14
 						};
 
-						// Convert World -> Local relative to the NEW parent
+						// Convert World -> Local relative to the new parent
 						Matrix invParent = MatrixInvert(transform->model_matrix);
 						Vector3 localPos = Vector3Transform(trueWorldPos, invParent);
 
@@ -185,8 +188,11 @@ namespace editor {
 					auto* old_parent = m_Context->try_get_component<me::components::TransformComponent>(transform->parent);
 					if (old_parent) {
 						old_parent->remove_child(entity);
-						//transform->position = Vector3Transform(transform->position, old_parent->model_matrix);
-						transform->position = { transform->model_matrix.m12, transform->model_matrix.m13, transform->model_matrix.m14 };
+						transform->position = {
+							transform->model_matrix.m12,
+							transform->model_matrix.m13,
+							transform->model_matrix.m14
+						};
 					}
 					transform->parent = me::entity::null;
 				}

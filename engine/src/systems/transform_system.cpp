@@ -14,8 +14,7 @@ namespace me::systems {
 		bool rotated = !Vector3Equals(t->rotation, t->last_rotation);
 		bool scaled = !Vector3Equals(t->scale, t->last_scale);
 
-		// If Euler angles were changed externally (e.g. via the inspector),
-		// rebuild the quaternion from them so it stays in sync.
+		// If Euler angles were changed externally (e.g. via the inspector), rebuild the quaternion from them so it stays in sync.
 		if (rotated) {
 			t->rotation_quat = QuaternionNormalize(QuaternionFromEuler(
 				t->rotation.x * DEG2RAD,

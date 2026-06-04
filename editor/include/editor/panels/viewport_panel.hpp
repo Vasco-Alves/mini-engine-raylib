@@ -2,21 +2,27 @@
 
 #include <raylib.h>
 #include <mini-ecs/registry.hpp>
+#include <mini-ecs/entity.hpp>
 #include <mini-engine-raylib/ecs/components.hpp>
+#include "editor/core/icommands.hpp"
 
 namespace editor {
 
 	class ViewportPanel {
 	public:
 		void on_start();
-		void on_shutdown();
+		void on_shutdown() const;
 
-		// Wraps the Raylib texture rendering phase
 		void begin_render();
 		void end_render();
 
-		// Draws the ImGui window and handles 3D math
-		void on_imgui_render(me::components::TransformComponent& cam_transform, me::components::CameraComponent& camera, me::entity::entity_id selected_entity, int gizmo_type);
+		void on_imgui_render(
+			me::components::TransformComponent& cam_transform,
+			me::components::CameraComponent& camera,
+			me::Entity selected_entity,
+			int gizmo_type,
+			editor::CommandHistory& command_history
+		);
 
 		bool is_focused() const { return m_IsFocused; }
 		bool is_hovered() const { return m_IsHovered; }
@@ -26,7 +32,7 @@ namespace editor {
 	private:
 		RenderTexture2D m_Texture;
 		Vector2 m_Bounds = { 1080.0f, 720.0f };
-		
+
 		bool m_IsFocused = false;
 		bool m_IsHovered = false;
 	};

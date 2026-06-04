@@ -8,3 +8,9 @@
 [submodule "vendor/joltphysics"]
 	path = vendor/joltphysics
 	url = https://github.com/jrouwe/JoltPhysics
+[submodule "vendor/raylib"]
+	path = vendor/raylib
+	url = https://github.com/raysan5/raylib.git
+[submodule "vendor/nlohmann_json"]
+	path = vendor/nlohmann_json
+	url = https://github.com/nlohmann/json.git

@@ -1,4 +1,6 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.5)
+
+set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
 
 project(
     "mini-engine-raylib"
@@ -7,9 +9,19 @@ project(
     LANGUAGES CXX
 )
 
-# --- Force everything to use MT/MTd (Static) (Jolt Physics) ---
-set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
+# Force Static Runtime Globally
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+# OVERRIDE LEGACY CMAKE FLAGS
+if(MSVC)
+    set(variables
+        CMAKE_C_FLAGS CMAKE_C_FLAGS_DEBUG CMAKE_C_FLAGS_RELEASE
+        CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG CMAKE_CXX_FLAGS_RELEASE
+    )
+    foreach(variable ${variables})
+        string(REGEX REPLACE "/MD" "/MT" ${variable} "${${variable}}")
+    endforeach()
+endif()
 
 # C++ Standard configuration
 set(CMAKE_CXX_STANDARD 23)
@@ -23,13 +35,19 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # ==========================================
-# VENDOR LIBRARIES
+# VENDOR LIBRARIES (Git Submodules)
 # ==========================================
-# Find Dependencies
-find_package(raylib CONFIG REQUIRED)
-find_package(nlohmann_json CONFIG REQUIRED)
-find_package(glfw3 CONFIG REQUIRED)
 
+# Raylib
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
+add_subdirectory(vendor/raylib)
+
+# nlohmann_json
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+add_subdirectory(vendor/nlohmann_json)
+
+# Local Vendors
 add_subdirectory(vendor/mini-ecs)
 add_subdirectory(vendor/lua)
 add_subdirectory(vendor/imgui)
@@ -42,24 +60,11 @@ set(TARGET_UNIT_TESTS OFF CACHE BOOL "Don't build Jolt unit tests" FORCE)
 set(TARGET_HELLO_WORLD OFF CACHE BOOL "Don't build Jolt hello world" FORCE)
 set(TARGET_PERFORMANCE_TEST OFF CACHE BOOL "Don't build Jolt performance test" FORCE)
 set(USE_AVX2 ON CACHE BOOL "Use AVX2 instructions for physics math" FORCE)
-
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY ON CACHE BOOL "Force Jolt to use Static" FORCE)
 add_subdirectory(vendor/joltphysics/Build)
 
 # ==========================================
 # INTERNAL TARGETS
 # ==========================================
-
-# Build engine
 add_subdirectory(engine)
 add_subdirectory(editor)
-
-# # If running "MiniEngine" directly (Dev Mode) build sandbox
-# if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR) 
-#     option(BUILD_SANDBOX "Build the sandbox application" ON)
-#     if (BUILD_SANDBOX)
-#         add_subdirectory(sandbox)
-#     endif()
-# # Being included by another game (User Mode)
-# else()
-#     message(STATUS "MiniEngine included as a library. Sandbox disabled.")
-# endif()

@@ -11,8 +11,15 @@ namespace editor {
 		void set_context(me::Registry* context);
 		void on_imgui_render();
 
-		me::entity::entity_id get_selected_entity() const { return m_SelectionContext; }
+		me::Entity get_selected_entity() const {
+			if (m_SelectionContext == 0xFFFFFFFF || m_Context == nullptr) {
+				return me::Entity(); // Returns an invalid entity
+			}
+			return me::Entity(m_SelectionContext, m_Context);
+		}
+
 		void set_selected_entity(me::entity::entity_id entity) { m_SelectionContext = entity; }
+		void set_selected_entity(me::Entity entity) { m_SelectionContext = entity.get_id(); }
 
 	private:
 		void draw_entity_node(me::entity::entity_id entity);
