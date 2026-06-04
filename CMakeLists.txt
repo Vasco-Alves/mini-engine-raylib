@@ -1,6 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
 
-# 1. THIS POLICY MUST BE SET BEFORE PROJECT()
 set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
 
 project(
@@ -10,11 +9,10 @@ project(
     LANGUAGES CXX
 )
 
-# 2. MODERN APPROACH: FORCE STATIC RUNTIME GLOBALLY
+# Force Static Runtime Globally
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-# 3. THE NUCLEAR OPTION: AGGRESSIVELY OVERRIDE LEGACY CMAKE FLAGS
-# This prevents stubborn libraries (like Lua or Raylib) from ignoring the settings above.
+# OVERRIDE LEGACY CMAKE FLAGS
 if(MSVC)
     set(variables
         CMAKE_C_FLAGS CMAKE_C_FLAGS_DEBUG CMAKE_C_FLAGS_RELEASE
@@ -68,6 +66,5 @@ add_subdirectory(vendor/joltphysics/Build)
 # ==========================================
 # INTERNAL TARGETS
 # ==========================================
-# Build engine
 add_subdirectory(engine)
 add_subdirectory(editor)

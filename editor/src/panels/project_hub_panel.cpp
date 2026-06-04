@@ -43,13 +43,25 @@ namespace editor {
 
 		if (ImGui::Button("Open Project", ImVec2(ImGui::GetContentRegionAvail().x, 40))) {
 			std::string target_path = m_ProjectInputPath;
-			if (!me::fs::exists(target_path)) me::fs::create_directory(target_path);
-
-			if (me::fs::exists((std::filesystem::path(target_path) / "assets").string())) {
-				if (on_project_open) on_project_open(target_path);
+			if (target_path.empty()) {
+				m_ShowPathError = true;
 			} else {
-				if (on_project_create) on_project_create(target_path);
+				m_ShowPathError = false;
+
+				if (!me::fs::exists(target_path)) me::fs::create_directory(target_path);
+
+				if (me::fs::exists((std::filesystem::path(target_path) / "assets").string())) {
+					if (on_project_open) on_project_open(target_path);
+				} else {
+					if (on_project_create) on_project_create(target_path);
+				}
 			}
+		}
+
+		// Render the error message OUTSIDE the button click event
+		if (m_ShowPathError) {
+			ImGui::Dummy(ImVec2(0, 5));
+			ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "No path specified.");
 		}
 
 		ImGui::NextColumn();

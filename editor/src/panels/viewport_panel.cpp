@@ -13,7 +13,7 @@ namespace editor {
 		m_Texture = LoadRenderTexture((int)m_Bounds.x, (int)m_Bounds.y);
 	}
 
-	void ViewportPanel::on_shutdown() {
+	void ViewportPanel::on_shutdown() const {
 		UnloadRenderTexture(m_Texture);
 	}
 
@@ -31,7 +31,7 @@ namespace editor {
 		EndTextureMode();
 	}
 
-	void ViewportPanel::on_imgui_render(me::components::TransformComponent& cam_transform, me::components::CameraComponent& camera, me::entity::entity_id selected, int gizmo_type) {
+	void ViewportPanel::on_imgui_render(me::components::TransformComponent& cam_transform, me::components::CameraComponent& camera, me::Entity selected_entity, int gizmo_type, editor::CommandHistory& command_history) {
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{ 0, 0 });
 		ImGui::Begin("Scene View");
 
@@ -45,11 +45,10 @@ namespace editor {
 		rlImGuiImageRenderTexture(&m_Texture);
 
 		// ==========================================
-		// IMGUIZMO INTEGRATION (THE QUATERNION FIX)
+		// IMGUIZMO INTEGRATION
 		// ==========================================
-		if (selected != 0xFFFFFFFF && gizmo_type != -1) {
-			auto* t = me::get_registry().try_get_component<me::components::TransformComponent>(selected);
-			if (t) {
+		if (selected_entity.is_valid() && gizmo_type != -1) {
+			if (auto* t = selected_entity.try_get_component<me::components::TransformComponent>()) {
 				ImGuizmo::SetOrthographic(false);
 				ImGuizmo::SetDrawlist();
 				ImGuizmo::SetRect(viewportPos.x, viewportPos.y, m_Bounds.x, m_Bounds.y);
@@ -64,7 +63,6 @@ namespace editor {
 				Matrix viewGL = MatrixTranspose(view);
 				Matrix projGL = MatrixTranspose(proj);
 
-				// 1. Pass the TRUE WORLD MATRIX to ImGuizmo so the rings align perfectly
 				Matrix worldGL = MatrixTranspose(t->model_matrix);
 				float transform_matrix[16];
 				for (int i = 0; i < 16; i++) transform_matrix[i] = ((float*)&worldGL)[i];
@@ -73,16 +71,23 @@ namespace editor {
 				float snap_value = (gizmo_type == ImGuizmo::ROTATE) ? 45.0f : 0.5f;
 				float snap[3] = { snap_value, snap_value, snap_value };
 
-				// 2. Manipulate the WORLD MATRIX
+				// --- UNDO / REDO TRACKING ---
+				static bool was_using_gizmo = false;
+				static me::components::TransformComponent start_state;
+
 				ImGuizmo::Manipulate((float*)&viewGL, (float*)&projGL, (ImGuizmo::OPERATION)gizmo_type, ImGuizmo::LOCAL, transform_matrix, nullptr, snap_active ? snap : nullptr);
 
 				if (ImGuizmo::IsUsing()) {
-					// 3. Convert the modified ImGuizmo matrix back to a Raylib Matrix
+					if (!was_using_gizmo) {
+						// User JUST clicked the gizmo. Record the state!
+						start_state = *t;
+						was_using_gizmo = true;
+					}
+
 					Matrix modifiedWorldGL;
 					for (int i = 0; i < 16; i++) ((float*)&modifiedWorldGL)[i] = transform_matrix[i];
 					Matrix modifiedWorld = MatrixTranspose(modifiedWorldGL);
 
-					// 4. Transform World Space back to Local Space (if it has a parent)
 					Matrix finalLocalMat = modifiedWorld;
 					if (t->parent != me::entity::null) {
 						auto* parent_t = me::get_registry().try_get_component<me::components::TransformComponent>(t->parent);
@@ -92,16 +97,8 @@ namespace editor {
 						}
 					}
 
-					// ==========================================
-					// 5. RAYLIB NATIVE MATH EXTRACTION
-					// Extract basis vectors as COLUMNS (column-major layout):
-					//   Right   = col 0 = (m0, m4, m8)
-					//   Up      = col 1 = (m1, m5, m9)
-					//   Forward = col 2 = (m2, m6, m10)
-					// ==========================================
 					if (gizmo_type == ImGuizmo::TRANSLATE) {
 						t->position = { finalLocalMat.m12, finalLocalMat.m13, finalLocalMat.m14 };
-
 					} else if (gizmo_type == ImGuizmo::ROTATE) {
 						Vector3 right = { finalLocalMat.m0, finalLocalMat.m4, finalLocalMat.m8 };
 						Vector3 up = { finalLocalMat.m1, finalLocalMat.m5, finalLocalMat.m9 };
@@ -116,9 +113,7 @@ namespace editor {
 						if (sy > 0) { rotMat.m1 /= sy; rotMat.m5 /= sy; rotMat.m9 /= sy; }
 						if (sz > 0) { rotMat.m2 /= sz; rotMat.m6 /= sz; rotMat.m10 /= sz; }
 
-						// Store quaternion directly — avoids Euler round-trip drift
 						t->rotation_quat = QuaternionNormalize(QuaternionFromMatrix(rotMat));
-						// Only update Euler if your UI needs to display them
 						Vector3 euler = QuaternionToEuler(t->rotation_quat);
 						t->rotation = { euler.x * RAD2DEG, euler.y * RAD2DEG, euler.z * RAD2DEG };
 
@@ -126,9 +121,28 @@ namespace editor {
 						Vector3 right = { finalLocalMat.m0, finalLocalMat.m4, finalLocalMat.m8 };
 						Vector3 up = { finalLocalMat.m1, finalLocalMat.m5, finalLocalMat.m9 };
 						Vector3 forward = { finalLocalMat.m2, finalLocalMat.m6, finalLocalMat.m10 };
-						t->scale = { Vector3Length(right), Vector3Length(up), Vector3Length(forward) };
-						// Also update position since ImGuizmo can shift origin during scale
+
+						float lx = Vector3Length(right);
+						float ly = Vector3Length(up);
+						float lz = Vector3Length(forward);
+
+						t->scale = {
+							lx > 0.0001f ? lx : t->scale.x,
+							ly > 0.0001f ? ly : t->scale.y,
+							lz > 0.0001f ? lz : t->scale.z
+						};
 						t->position = { finalLocalMat.m12, finalLocalMat.m13, finalLocalMat.m14 };
+					}
+				} else {
+					if (was_using_gizmo) {
+						// User JUST released the mouse. Push the command!
+						was_using_gizmo = false;
+
+						// Create and push the command to history
+						auto cmd = std::make_unique<editor::ModifyComponentCommand<me::components::TransformComponent>>(
+							selected_entity, start_state, *t
+						);
+						command_history.AddCommand(std::move(cmd));
 					}
 				}
 			}
@@ -177,7 +191,6 @@ namespace editor {
 						reg.try_get_component<me::components::DirectionalLightComponent>(e);
 
 					if (t && is_clickable) {
-
 						Vector3 world_pos = { t->model_matrix.m12, t->model_matrix.m13, t->model_matrix.m14 };
 
 						float world_scale_x = Vector3Length({ t->model_matrix.m0, t->model_matrix.m4, t->model_matrix.m8 });

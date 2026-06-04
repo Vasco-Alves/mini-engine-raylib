@@ -35,6 +35,9 @@ namespace editor {
 		void on_resize(int width, int height) override;
 
 	private:
+		// --- Events ---
+		void subcribe_events();
+
 		// --- Sub-Systems ---
 		void poll_shortcuts();
 		void draw_menu_bar();
@@ -75,6 +78,7 @@ namespace editor {
 			{1.0f, 1.0f, 1.0f}
 		};
 		bool m_IsFlying = false;
+		Vector3 m_OrbitTarget = { 0.0f, 0.0f, 0.0f };
 
 		// --- Physics ---
 		bool m_StepPhysicsNextFrame = false;
@@ -90,6 +94,9 @@ namespace editor {
 		// --- Layout ---
 		bool m_WantsToSaveLayout = false;
 		bool m_WantsToLoadLayout = false;
+
+		// -- Command History --
+		editor::CommandHistory m_CommandHistory;
 	};
 
 } // namespace editor

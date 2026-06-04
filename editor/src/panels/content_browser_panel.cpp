@@ -1,4 +1,5 @@
 #include "editor/panels/content_browser_panel.hpp"
+#include "editor/utils/file_dialogs.hpp"
 #include <mini-engine-raylib/scene/scene_manager.hpp>
 #include <mini-engine-raylib/core/engine.hpp>
 #include <mini-engine-raylib/ecs/components.hpp>
@@ -20,7 +21,7 @@ namespace editor {
 	void ContentBrowserPanel::on_imgui_render() {
 		ImGui::Begin("Content Browser");
 
-		// 1. Directory Path & Back Button
+		// Directory Path & Back Button
 		if (m_CurrentDirectory != std::filesystem::path(m_ProjectPath / "assets")) {
 			if (ImGui::Button("<- Back")) {
 				m_CurrentDirectory = m_CurrentDirectory.parent_path();
@@ -40,15 +41,24 @@ namespace editor {
 		int columnCount = (int)(panelWidth / cellSize);
 		if (columnCount < 1) columnCount = 1;
 
-		// --- RIGHT CLICK EMPTY SPACE (Create Menu) ---
+		// --- Right Click Empty Space ---
 		if (ImGui::BeginPopupContextWindow("ContentBrowserBackground", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
 			if (ImGui::MenuItem("New Folder")) {
 				m_ShowNewFolderModal = true;
 				strncpy(m_NewItemName, "NewFolder", sizeof(m_NewItemName));
 			}
+
 			if (ImGui::MenuItem("New Lua Script")) {
 				m_ShowNewScriptModal = true;
 				strncpy(m_NewItemName, "new_script", sizeof(m_NewItemName));
+			}
+
+			ImGui::Separator();
+
+			if (ImGui::MenuItem("Open in System Explorer")) {
+				editor::utils::open_folder_dialog(
+					std::filesystem::absolute(m_CurrentDirectory).string()
+				);
 			}
 			ImGui::EndPopup();
 		}
@@ -64,7 +74,7 @@ namespace editor {
 				ImGui::TableNextColumn();
 				ImGui::PushID(filenameString.c_str());
 
-				// --- SMART ASSET RECOGNITION (Color Coding) ---
+				// --- File Recognition (Color Coding) ---
 				ImVec4 iconColor = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 				const char* iconLabel = "[FILE]";
 

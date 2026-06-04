@@ -20,6 +20,7 @@ namespace editor {
 	private:
 		char m_ProjectInputPath[256] = "";
 		std::vector<std::string> m_RecentProjects;
+		bool m_ShowPathError = false;
 	};
 
 }

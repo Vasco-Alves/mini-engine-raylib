@@ -72,4 +72,37 @@ namespace me::camera {
 		float horiz_dist = std::sqrt(dx * dx + dz * dz);
 		t->rotation.x = std::atan2(dy, horiz_dist) * (180.0f / PI);
 	}
+
+	void orbit_editor_camera(me::components::TransformComponent& t, me::components::CameraComponent& cam, const Vector3& orbit_target, float dt) {
+		// Rotate yaw/pitch from mouse delta
+		t.rotation.y -= me::input::axis_value("LookX") * cam.mouse_sens;
+		t.rotation.x -= me::input::axis_value("LookY") * cam.mouse_sens;
+		t.rotation.x = std::clamp(t.rotation.x, -89.0f, 89.0f);
+
+		float yaw_rad = t.rotation.y * (PI / 180.0f);
+		float pitch_rad = t.rotation.x * (PI / 180.0f);
+
+		// Forward vector from current angles
+		float look_x = std::sin(yaw_rad) * std::cos(pitch_rad);
+		float look_y = std::sin(pitch_rad);
+		float look_z = std::cos(yaw_rad) * std::cos(pitch_rad);
+
+		// Distance from camera to the stable orbit target
+		float dx = t.position.x - orbit_target.x;
+		float dy = t.position.y - orbit_target.y;
+		float dz = t.position.z - orbit_target.z;
+		float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+		if (dist < 0.5f) dist = 0.5f;
+
+		// Reposition camera on the sphere around the orbit target
+		t.position.x = orbit_target.x - look_x * dist;
+		t.position.y = orbit_target.y - look_y * dist;
+		t.position.z = orbit_target.z - look_z * dist;
+
+		// Update the raylib target to stay in front of the camera
+		cam.target.x = t.position.x + look_x;
+		cam.target.y = t.position.y + look_y;
+		cam.target.z = t.position.z + look_z;
+	}
+
 }

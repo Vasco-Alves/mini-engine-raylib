@@ -32,8 +32,7 @@ uniform vec3 dirLightColor;
 uniform float dirLightIntensity;
 uniform int hasDirLight;
 
-void main()
-{
+void main() {
     // Base texture color
     vec4 texelColor = texture(texture0, fragTexCoord);
     vec3 baseColor = texelColor.rgb * colDiffuse.rgb * fragColor.rgb;

@@ -31,7 +31,11 @@ namespace me::systems {
 
 			if (t && c) {
 				// Override with ECS Game Camera
-				listener_pos = { t->position.x, t->position.y, t->position.z };
+				listener_pos = {
+					t->model_matrix.m12,
+					t->model_matrix.m13,
+					t->model_matrix.m14
+				};
 				Vector3 forward = Vector3Normalize(Vector3Subtract(c->target, listener_pos));
 				listener_right = Vector3Normalize(Vector3CrossProduct(forward, c->up));
 			}
@@ -64,8 +68,6 @@ namespace me::systems {
 					auto* source_transform = registry.try_get_component<me::components::TransformComponent>(e);
 
 					if (source_transform) {
-						//Vector3 source_pos = { source_transform->position.x, source_transform->position.y, source_transform->position.z };
-
 						Vector3 source_pos = {
 							source_transform->model_matrix.m12,
 							source_transform->model_matrix.m13,
