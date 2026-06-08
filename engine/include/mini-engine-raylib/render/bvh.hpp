@@ -650,6 +650,7 @@ namespace me::raytracing {
 					std::pow(mat->albedo.b / 255.0f, 2.2f)
 				};
 				p.roughness = mat->roughness;
+				p.metallic = mat->metallic;
 				p.emission = {
 					p.base_color.x * mat->emission_power,
 					p.base_color.y * mat->emission_power,
@@ -665,9 +666,10 @@ namespace me::raytracing {
 					std::pow(base_col.b / 255.0f, 2.2f)
 				};
 				p.roughness = 1.0f;
+				p.metallic = 0.0f;
 				p.emission = { 0.0f, 0.0f, 0.0f };
-				p.transmission = 0.0f;              // NEW
-				p.ior = 1.0f;                       // NEW
+				p.transmission = 0.0f;
+				p.ior = 1.0f;
 			}
 
 			return p;

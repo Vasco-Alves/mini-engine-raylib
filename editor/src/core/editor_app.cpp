@@ -505,8 +505,9 @@ namespace editor {
 			}
 		}
 
-		// Viewport-focused shortcuts — only when the viewport has focus and we're not flying
-		if (m_ViewportPanel.is_focused() && !m_IsFlying && !wantText) {
+		// Viewport-focused shortcuts
+		//if (m_ViewportPanel.is_focused() && !m_IsFlying && !wantText) {
+		if (!m_IsFlying && !wantText) {
 
 			// 8. Gizmo tool switching (Q / W / R / S)
 			if (ImGui::IsKeyPressed(ImGuiKey_Q)) m_GizmoType = -1;

@@ -49,8 +49,6 @@ namespace me::systems {
 		uint32_t m_TotalFramesRendered = 0;
 
 	private:
-		// trace_ray no longer takes Registry& — it reads m_ActiveRegistry,
-		// which is set for the lifetime of a single on_update call.
 		Vector3 trace_ray(const me::raytracing::Ray& ray, int depth, uint32_t& seed);
 
 		me::raytracing::Ray generate_camera_ray(

@@ -32,12 +32,10 @@ namespace me::systems {
 		m_OutputTexture = LoadTextureFromImage(img);
 		UnloadImage(img);
 
-		// Don't build the BVH here — the registry isn't available at start time.
-		// It will be built on the first on_update call.
+		// BVH is built lazily on the first on_update call because the registry may not be fully populated at start time.
 		m_FrameCount = 1;
 
-		me::logger::info("Raytracer initialized at "
-			+ std::to_string(width) + "x" + std::to_string(height));
+		me::logger::info("Raytracer initialized at " + std::to_string(width) + "x" + std::to_string(height));
 	}
 
 	void RaytracerSystem::on_stop() {
@@ -72,29 +70,30 @@ namespace me::systems {
 		me::logger::info("Raytrace image saved to: " + filepath);
 	}
 
-	void RaytracerSystem::on_update(
-		me::Registry& registry,
-		const me::components::CameraComponent& camera,
-		const me::components::TransformComponent& cam_transform) {
+	void RaytracerSystem::on_update(me::Registry& registry, const me::components::CameraComponent& camera, const me::components::TransformComponent& cam_transform) {
+
 		// Lazy BVH build: handles the case where on_start fired before the scene
 		// was populated, so reset_accumulation had no registry to work with.
 		if (m_BVH.empty()) {
 			m_BVH.build(registry);
 		}
 
-		// Pin the registry for this frame so trace_ray can reach it without
-		// carrying the pointer through every recursive bounce call.
+		// Pin the registry as const for this frame — the trace loop is read-only.
+		// Using a const pointer enforces that and prevents accidental writes from
+		// any future code path inside trace_ray.
 		m_ActiveRegistry = &registry;
 
 		if (!accumulate) {
-			// Real-time noisy mode: reset the pixel history every frame.
-			// Don't pass the registry — the BVH is still valid, no need to rebuild.
+			// Real-time noisy mode: reset pixel history every frame.
+			// Reuse the existing BVH — no need to rebuild.
+			// m_TotalFramesRendered keeps incrementing so the PCG seed and the
+			// Halton jitter stay in sync even across accumulation resets.
 			reset_accumulation();
 		}
 
 		if (accumulate && m_FrameCount >= preview_samples) {
 			m_ActiveRegistry = nullptr;
-			return; // CPU rest — we've reached target quality
+			return; // We've reached target quality — let the CPU rest.
 		}
 
 		std::vector<int> rows(m_Height);
@@ -104,14 +103,15 @@ namespace me::systems {
 			for (int x = 0; x < m_Width; ++x) {
 				int index = y * m_Width + x;
 
-				// 1. Initialize the ultra-fast PCG state for this specific pixel & frame
-				//uint32_t seed = y * m_Width + x + m_FrameCount * 719393;
-				uint32_t seed = y * m_Width + x + m_TotalFramesRendered * 719393;
+				uint32_t seed = static_cast<uint32_t>(y * m_Width + x) + m_TotalFramesRendered * 719393u;
 
-				// 2. Generate the QMC Anti-Aliased Camera Ray
-				me::raytracing::Ray ray = generate_camera_ray(x, y, m_Width, m_Height, camera, cam_transform, m_FrameCount);
+				// Generate the QMC anti-aliased camera ray.
+				// m_FrameCount drives the Halton sequence (starts at 1, never 0,
+				// which avoids the degenerate (0,0) sample at the pixel center).
+				me::raytracing::Ray ray = generate_camera_ray(
+					x, y, m_Width, m_Height, camera, cam_transform, m_FrameCount);
 
-				// 3. Trace the ray using the seed
+				// Trace and accumulate.
 				Vector3 light = trace_ray(ray, 0, seed);
 
 				m_AccumulationBuffer[index].x += light.x;
@@ -119,40 +119,31 @@ namespace me::systems {
 				m_AccumulationBuffer[index].z += light.z;
 
 				Vector3 avg = {
-					m_AccumulationBuffer[index].x / (float)m_FrameCount,
-					m_AccumulationBuffer[index].y / (float)m_FrameCount,
-					m_AccumulationBuffer[index].z / (float)m_FrameCount
+					m_AccumulationBuffer[index].x / static_cast<float>(m_FrameCount),
+					m_AccumulationBuffer[index].y / static_cast<float>(m_FrameCount),
+					m_AccumulationBuffer[index].z / static_cast<float>(m_FrameCount)
 				};
 
-				// --- 1. TONEMAPPING (ACES Filmic) ---
-				float exposure = 0.6f; // Tweak this if the scene is too bright or dark
+				// ---- Tonemapping (ACES Filmic) ----
+				float exposure = 0.6f;
 				avg.x *= exposure;
 				avg.y *= exposure;
 				avg.z *= exposure;
 
-				// ACES math constants
-				const float a = 2.51f;
-				const float b = 0.03f;
-				const float c = 2.43f;
-				const float d = 0.59f;
-				const float e = 0.14f;
-
-				// Apply ACES curve
+				const float a = 2.51f, b = 0.03f, c = 2.43f, d = 0.59f, e = 0.14f;
 				avg.x = (avg.x * (a * avg.x + b)) / (avg.x * (c * avg.x + d) + e);
 				avg.y = (avg.y * (a * avg.y + b)) / (avg.y * (c * avg.y + d) + e);
 				avg.z = (avg.z * (a * avg.z + b)) / (avg.z * (c * avg.z + d) + e);
 
-				// --- Gamma Correction (approx gamma 2.2 via sqrt) ---
-				// Linear light accumulation looks washed out on a display —
-				// sqrt maps it into the perceptual range monitors expect.
+				// ---- Gamma correction (approx γ 2.2 via sqrt) ----
 				avg.x = std::sqrt(std::max(0.0f, avg.x));
 				avg.y = std::sqrt(std::max(0.0f, avg.y));
 				avg.z = std::sqrt(std::max(0.0f, avg.z));
 
 				m_PixelData[index] = ::Color{
-					(unsigned char)(std::clamp(avg.x, 0.0f, 1.0f) * 255.0f),
-					(unsigned char)(std::clamp(avg.y, 0.0f, 1.0f) * 255.0f),
-					(unsigned char)(std::clamp(avg.z, 0.0f, 1.0f) * 255.0f),
+					static_cast<unsigned char>(std::clamp(avg.x, 0.0f, 1.0f) * 255.0f),
+					static_cast<unsigned char>(std::clamp(avg.y, 0.0f, 1.0f) * 255.0f),
+					static_cast<unsigned char>(std::clamp(avg.z, 0.0f, 1.0f) * 255.0f),
 					255
 				};
 			}
@@ -161,7 +152,6 @@ namespace me::systems {
 		UpdateTexture(m_OutputTexture, m_PixelData.data());
 
 		if (accumulate) m_FrameCount++;
-
 		m_TotalFramesRendered++;
 
 		m_ActiveRegistry = nullptr;
@@ -172,16 +162,18 @@ namespace me::systems {
 		const me::components::CameraComponent& camera,
 		const me::components::TransformComponent& cam_transform,
 		uint32_t frame_count) {
-		// QMC Jitter: Use Base 2 for X and Base 3 for Y
-		// This smoothly perfectly covers the pixel area over time!
+
+		// Halton(base-2) for X, Halton(base-3) for Y.
+		// frame_count starts at 1, so we never evaluate the degenerate (0, 0)
+		// sample — which would always land exactly at the pixel centre and
+		// produce structured aliasing instead of smooth convergence.
 		float jitter_x = me::raytracing::halton(frame_count, 2) - 0.5f;
 		float jitter_y = me::raytracing::halton(frame_count, 3) - 0.5f;
 
-		// Add jitter to the pixel center
-		float ndc_x = (2.0f * (x + 0.5f + jitter_x) / (float)width) - 1.0f;
-		float ndc_y = 1.0f - (2.0f * (y + 0.5f + jitter_y) / (float)height);
+		float ndc_x = (2.0f * (x + 0.5f + jitter_x) / static_cast<float>(width)) - 1.0f;
+		float ndc_y = 1.0f - (2.0f * (y + 0.5f + jitter_y) / static_cast<float>(height));
 
-		float aspect = (float)width / (float)height;
+		float aspect = static_cast<float>(width) / static_cast<float>(height);
 		float scale = std::tan((camera.fov * 0.5f) * DEG2RAD);
 
 		float vx = ndc_x * aspect * scale;
@@ -209,8 +201,7 @@ namespace me::systems {
 		if (depth >= max_bounces)
 			return { 0.0f, 0.0f, 0.0f };
 
-		// Pre-compute 1/dir once; reused for every AABB slab test this frame.
-		// Guard against exact zeros to avoid inf*0 NaNs in the slab math.
+		// Pre-compute 1/dir; guards against exact zeros to avoid inf*0 NaNs.
 		Vector3 inv_dir = {
 			1.0f / (std::abs(ray.direction.x) > 1e-8f ? ray.direction.x : 1e-8f),
 			1.0f / (std::abs(ray.direction.y) > 1e-8f ? ray.direction.y : 1e-8f),
@@ -228,11 +219,8 @@ namespace me::systems {
 		Vector3 shadow_origin = Vector3Add(p.hit_point, Vector3Scale(p.normal, 0.001f));
 
 		// ==========================================
-		// 2. EMISSION — early out for emissive surfaces
+		// 2. EMISSION — early out for light sources
 		// ==========================================
-		// Return emission immediately — the surface IS a light source.
-		// Bounce rays that land on emissive geometry will pick this up,
-		// which is how emissive objects illuminate neighbours through GI.
 		if ((p.emission.x + p.emission.y + p.emission.z) > 0.0f)
 			return p.emission;
 
@@ -241,7 +229,7 @@ namespace me::systems {
 		// ==========================================
 		Vector3 direct = { 0.0f, 0.0f, 0.0f };
 
-		// Point lights
+		// ---- Point lights ----
 		auto& light_pool = m_ActiveRegistry->view<me::components::LightComponent>();
 		for (size_t i = 0; i < light_pool.size(); ++i) {
 			auto* lt = m_ActiveRegistry->try_get_component<me::components::TransformComponent>(
@@ -250,7 +238,6 @@ namespace me::systems {
 
 			auto& l = light_pool.components[i];
 
-			//Vector3 lcolor = { l.color.r / 255.0f, l.color.g / 255.0f, l.color.b / 255.0f };
 			Vector3 lcolor = {
 				std::pow(l.color.r / 255.0f, 2.2f),
 				std::pow(l.color.g / 255.0f, 2.2f),
@@ -266,9 +253,8 @@ namespace me::systems {
 				1.0f / (std::abs(ldir.y) > 1e-8f ? ldir.y : 1e-8f),
 				1.0f / (std::abs(ldir.z) > 1e-8f ? ldir.z : 1e-8f)
 			};
-			// Shadow: stop at ldist so occluders behind the light don't count
-			bool in_shadow = m_BVH.traverse(shadow_origin, ldir, sinv,
-				ldist, *m_ActiveRegistry).has_value();
+
+			bool in_shadow = m_BVH.traverse(shadow_origin, ldir, sinv, ldist, *m_ActiveRegistry).has_value();
 			if (!in_shadow) {
 				float ndotl = std::max(0.0f, Vector3DotProduct(p.normal, ldir));
 				direct.x += ndotl * lcolor.x * l.intensity;
@@ -277,7 +263,7 @@ namespace me::systems {
 			}
 		}
 
-		// Directional lights
+		// ---- Directional lights ----
 		auto& dir_pool = m_ActiveRegistry->view<me::components::DirectionalLightComponent>();
 		for (size_t i = 0; i < dir_pool.size(); ++i) {
 			auto* lt = m_ActiveRegistry->try_get_component<me::components::TransformComponent>(
@@ -286,7 +272,6 @@ namespace me::systems {
 
 			auto& dl = dir_pool.components[i];
 
-			//Vector3 lcolor = { dl.color.r / 255.0f, dl.color.g / 255.0f, dl.color.b / 255.0f };
 			Vector3 lcolor = {
 				std::pow(dl.color.r / 255.0f, 2.2f),
 				std::pow(dl.color.g / 255.0f, 2.2f),
@@ -304,9 +289,8 @@ namespace me::systems {
 				1.0f / (std::abs(ldir.y) > 1e-8f ? ldir.y : 1e-8f),
 				1.0f / (std::abs(ldir.z) > 1e-8f ? ldir.z : 1e-8f)
 			};
-			// Directional light is infinitely far — any occluder counts
-			bool in_shadow = m_BVH.traverse(shadow_origin, ldir, sinv,
-				FLT_MAX, *m_ActiveRegistry).has_value();
+
+			bool in_shadow = m_BVH.traverse(shadow_origin, ldir, sinv, FLT_MAX, *m_ActiveRegistry).has_value();
 			if (!in_shadow) {
 				float ndotl = std::max(0.0f, Vector3DotProduct(p.normal, ldir));
 				direct.x += ndotl * lcolor.x * dl.intensity;
@@ -315,10 +299,10 @@ namespace me::systems {
 			}
 		}
 
-		// Energy conservation: mirrors (roughness=0) are fully specular → no diffuse direct
-		direct.x *= p.roughness;
-		direct.y *= p.roughness;
-		direct.z *= p.roughness;
+		// Direct light is purely diffuse. Metals have no diffuse properties!
+		direct.x *= p.roughness * (1.0f - p.metallic);
+		direct.y *= p.roughness * (1.0f - p.metallic);
+		direct.z *= p.roughness * (1.0f - p.metallic);
 
 		// ==========================================
 		// 4. AMBIENT (sky-derived)
@@ -334,45 +318,54 @@ namespace me::systems {
 		// ==========================================
 		// 5. BOUNCE (GI + Reflections + Refractions)
 		// ==========================================
+		float survival_p = 1.0f;
+
+		// --- RUSSIAN ROULETTE ---
+		if (depth >= 2) {
+			float max_channel = std::max({ p.base_color.x, p.base_color.y, p.base_color.z });
+			survival_p = std::clamp(max_channel, 0.1f, 0.95f);
+
+			if (random_float(seed) > survival_p) {
+				// Ray dies early! Return gathered light.
+				return Vector3{
+					p.base_color.x * (direct.x + ambient.x),
+					p.base_color.y * (direct.y + ambient.y),
+					p.base_color.z * (direct.z + ambient.z)
+				};
+			}
+		}
+
 		Vector3 bounce_dir;
 		Vector3 bounce_origin;
 
 		if (p.transmission > 0.0f) {
-			// --- GLASS / REFRACTION PATH ---
-
-			// If we hit the outside, ratio is Air/IOR. If inside, ratio is IOR/Air.
+			// ---- Glass / Refraction path ----
 			float refraction_ratio = p.front_face ? (1.0f / p.ior) : p.ior;
 
 			Vector3 unit_dir = Vector3Normalize(ray.direction);
-			float cos_theta = std::min(Vector3DotProduct(Vector3Scale(unit_dir, -1.0f), p.normal), 1.0f);
-			float sin_theta = std::sqrt(1.0f - cos_theta * cos_theta);
+			float   cos_theta = std::min(Vector3DotProduct(Vector3Scale(unit_dir, -1.0f), p.normal), 1.0f);
+			float   sin_theta = std::sqrt(1.0f - cos_theta * cos_theta);
 
-			// Check for Total Internal Reflection (TIR)
 			bool cannot_refract = refraction_ratio * sin_theta > 1.0f;
 
 			if (cannot_refract || reflectance(cos_theta, refraction_ratio) > random_float(seed)) {
-				// Mirror reflection (Fresnel or TIR)
 				bounce_dir = Vector3Normalize(Vector3Reflect(unit_dir, p.normal));
 			} else {
-				// Pass completely through the glass!
 				bounce_dir = Vector3Normalize(refract(unit_dir, p.normal, refraction_ratio));
 			}
 
-			// Add frosted glass effect if roughness > 0
 			if (p.roughness > 0.0f) {
-				bounce_dir = Vector3Normalize(Vector3Add(bounce_dir, Vector3Scale(random_unit_vector(seed), p.roughness)));
+				bounce_dir = Vector3Normalize(Vector3Add(
+					bounce_dir, Vector3Scale(random_unit_vector(seed), p.roughness)));
 			}
 
-			// Push origin slightly to avoid self-intersection acne.
-			// If we are entering the glass, push INTO it. If reflecting, push OUT of it.
-			if (Vector3DotProduct(bounce_dir, p.normal) < 0.0f) {
+			if (Vector3DotProduct(bounce_dir, p.normal) < 0.0f)
 				bounce_origin = Vector3Subtract(p.hit_point, Vector3Scale(p.normal, 0.001f));
-			} else {
+			else
 				bounce_origin = Vector3Add(p.hit_point, Vector3Scale(p.normal, 0.001f));
-			}
 
 		} else {
-			// --- OPAQUE / SOLID PATH ---
+			// ---- Opaque / Solid path ----
 			Vector3 reflect_dir = Vector3Normalize(Vector3Reflect(ray.direction, p.normal));
 			Vector3 diffuse_dir = Vector3Normalize(Vector3Add(p.normal, random_unit_vector(seed)));
 			bounce_dir = Vector3Normalize(Vector3Lerp(reflect_dir, diffuse_dir, p.roughness));
@@ -384,30 +377,38 @@ namespace me::systems {
 
 		Vector3 bounce_color = trace_ray({ bounce_origin, bounce_dir }, depth + 1, seed);
 
-		// For glass, we don't multiply by a bounce weight (bw). Light passes right through.
-		float sw = 1.0f - p.roughness;
-		float dw = p.roughness;
-		float bw = sw + dw * 0.5f;
+		// --- RR ENERGY COMPENSATION ---
+		bounce_color.x /= survival_p;
+		bounce_color.y /= survival_p;
+		bounce_color.z /= survival_p;
 
-		Vector3 bounce = { 0,0,0 };
+		// ---- Combine bounce contribution ----
+		Vector3 bounce = { 0.0f, 0.0f, 0.0f };
 		if (p.transmission > 0.0f) {
-			// Glass tints the light based on its color as light passes through
 			bounce = { bounce_color.x * p.base_color.x, bounce_color.y * p.base_color.y, bounce_color.z * p.base_color.z };
 		} else {
-			// Solid objects bounce light normally
-			bounce = { bounce_color.x * p.base_color.x * bw, bounce_color.y * p.base_color.y * bw, bounce_color.z * p.base_color.z * bw };
+			float sw = 1.0f - p.roughness;
+			float dw = p.roughness;
+			float bw = sw + dw * 0.5f;
+
+			// FIX: Only smooth plastics reflect pure white. Everything else uses base_color!
+			float white_blend = (1.0f - p.metallic) * (1.0f - p.roughness);
+			Vector3 bounce_tint = {
+				std::lerp(p.base_color.x, 1.0f, white_blend),
+				std::lerp(p.base_color.y, 1.0f, white_blend),
+				std::lerp(p.base_color.z, 1.0f, white_blend)
+			};
+
+			bounce = {
+				bounce_color.x * bounce_tint.x * bw,
+				bounce_color.y * bounce_tint.y * bw,
+				bounce_color.z * bounce_tint.z * bw
+			};
 		}
 
 		// ==========================================
 		// 6. COMBINE
-		// radiance = albedo*(direct+ambient) + bounce
 		// ==========================================
-		//return Vector3{
-		//	std::clamp(p.base_color.x * (direct.x + ambient.x) + bounce.x, 0.0f, 1.0f),
-		//	std::clamp(p.base_color.y * (direct.y + ambient.y) + bounce.y, 0.0f, 1.0f),
-		//	std::clamp(p.base_color.z * (direct.z + ambient.z) + bounce.z, 0.0f, 1.0f)
-		//};
-
 		return Vector3{
 			p.base_color.x * (direct.x + ambient.x) + bounce.x,
 			p.base_color.y * (direct.y + ambient.y) + bounce.y,

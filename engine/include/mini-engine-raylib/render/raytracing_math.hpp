@@ -19,6 +19,7 @@ namespace me::raytracing {
 		Vector3 normal;
 		Vector3 base_color;
 		float   roughness;
+		float   metallic;
 		Vector3 emission;
 		float   transmission;
 		float   ior;
