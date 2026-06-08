@@ -47,7 +47,7 @@ namespace me {
 					{"x", t.position.x}, {"y", t.position.y}, {"z", t.position.z},
 					{"rot_x", t.rotation.x}, {"rot_y", t.rotation.y}, {"rot_z", t.rotation.z},
 					{"sx", t.scale.x}, {"sy", t.scale.y}, {"sz", t.scale.z},
-					// NEW: Save Hierarchy Data
+					// Hierarchy Data
 					{"parent", static_cast<uint32_t>(t.parent)},
 					{"children", t.children}
 				};
@@ -76,6 +76,19 @@ namespace me {
 						{"color_r", mod->tint.r},
 						{"color_g", mod->tint.g},
 						{"color_b", mod->tint.b}
+					};
+				}
+
+				// --- NEW: Material ---
+				if (auto* mat = reg.try_get_component<me::components::MaterialComponent>(e)) {
+					comps["Material"] = json{
+						{"color_r", mat->albedo.r},
+						{"color_g", mat->albedo.g},
+						{"color_b", mat->albedo.b},
+						{"color_a", mat->albedo.a},
+						{"roughness", mat->roughness},
+						{"metallic", mat->metallic},
+						{"emission_power", mat->emission_power}
 					};
 				}
 
@@ -214,7 +227,6 @@ namespace me {
 		}
 
 		bool load(const std::string& filepath) {
-
 			std::filesystem::path physical_path = me::fs::resolve_if_virtual(filepath);
 
 			std::ifstream ifs(physical_path, std::ios::binary);
@@ -318,6 +330,22 @@ namespace me {
 						255
 					};
 					e.add_component(mc);
+				}
+
+				// --- NEW: Material ---
+				if (comps.contains("Material")) {
+					auto& j = comps["Material"];
+					me::components::MaterialComponent mat;
+					mat.albedo = me::Color{
+						static_cast<unsigned char>(j.value("color_r", 255)),
+						static_cast<unsigned char>(j.value("color_g", 255)),
+						static_cast<unsigned char>(j.value("color_b", 255)),
+						static_cast<unsigned char>(j.value("color_a", 255))
+					};
+					mat.roughness = j.value("roughness", 1.0f);
+					mat.metallic = j.value("metallic", 0.0f);
+					mat.emission_power = j.value("emission_power", 0.0f);
+					e.add_component(mat);
 				}
 
 				if (comps.contains("Script")) {

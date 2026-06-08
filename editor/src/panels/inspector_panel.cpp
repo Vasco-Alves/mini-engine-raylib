@@ -23,6 +23,10 @@ namespace editor {
 			draw_transform(selected_entity, command_history);
 			draw_shape3d(selected_entity, command_history);
 			draw_model3d(selected_entity, command_history);
+
+			// --- NEW MATERIAL PANEL ---
+			draw_material(selected_entity, command_history);
+
 			draw_light(selected_entity, command_history);
 			draw_directional_light(selected_entity, command_history);
 			draw_rigidbody(selected_entity, command_history);
@@ -149,6 +153,66 @@ namespace editor {
 				if (finished_editing) {
 					auto cmd = std::make_unique<editor::ModifyComponentCommand<me::components::Shape3DComponent>>(
 						entity, start_state, *shape
+					);
+					command_history.AddCommand(std::move(cmd));
+				}
+
+				ImGui::TreePop();
+			}
+			ImGui::PopID();
+		}
+	}
+
+	// ==========================================
+	// NEW MATERIAL PANEL IMPLEMENTATION
+	// ==========================================
+	void InspectorPanel::draw_material(me::Entity entity, editor::CommandHistory& command_history) {
+		if (auto* mat = entity.try_get_component<me::components::MaterialComponent>()) {
+			ImGui::PushID("Material");
+
+			float button_size = ImGui::GetFrameHeight();
+			bool opened = ImGui::TreeNodeEx("Material", s_TreeNodeFlags);
+
+			ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - button_size);
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+			bool remove_component = ImGui::Button("X", ImVec2(button_size, button_size));
+			ImGui::PopStyleColor();
+
+			if (remove_component) entity.remove_component<me::components::MaterialComponent>();
+
+			if (opened && !remove_component) {
+				static me::components::MaterialComponent start_state;
+				bool finished_editing = false;
+
+				// Albedo Color
+				float color[4] = { mat->albedo.r / 255.0f, mat->albedo.g / 255.0f, mat->albedo.b / 255.0f, mat->albedo.a / 255.0f };
+				if (ImGui::ColorEdit4("Albedo", color)) {
+					mat->albedo.r = static_cast<uint8_t>(color[0] * 255.0f);
+					mat->albedo.g = static_cast<uint8_t>(color[1] * 255.0f);
+					mat->albedo.b = static_cast<uint8_t>(color[2] * 255.0f);
+					mat->albedo.a = static_cast<uint8_t>(color[3] * 255.0f);
+				}
+				if (ImGui::IsItemActivated()) start_state = *mat;
+				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
+
+				// Roughness
+				ImGui::SliderFloat("Roughness", &mat->roughness, 0.0f, 1.0f);
+				if (ImGui::IsItemActivated()) start_state = *mat;
+				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
+
+				// Metallic
+				ImGui::SliderFloat("Metallic", &mat->metallic, 0.0f, 1.0f);
+				if (ImGui::IsItemActivated()) start_state = *mat;
+				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
+
+				// Emission
+				ImGui::DragFloat("Emission Power", &mat->emission_power, 0.1f, 0.0f, 100.0f);
+				if (ImGui::IsItemActivated()) start_state = *mat;
+				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
+
+				if (finished_editing) {
+					auto cmd = std::make_unique<editor::ModifyComponentCommand<me::components::MaterialComponent>>(
+						entity, start_state, *mat
 					);
 					command_history.AddCommand(std::move(cmd));
 				}
@@ -610,8 +674,6 @@ namespace editor {
 		}
 	}
 
-	// For Script Component, structural Undo/Redo is needed (adding/removing array items), 
-	// so the standard ModifyComponentCommand<T> generic is not safely applied here without further custom logic.
 	void InspectorPanel::draw_script(me::Entity entity) {
 		auto* script_comp = entity.try_get_component<me::components::ScriptComponent>();
 		if (script_comp) {
@@ -701,6 +763,10 @@ namespace editor {
 
 			if (!entity.try_get_component<me::components::Model3DComponent>() && ImGui::MenuItem("3D Model"))
 				entity.add_component<me::components::Model3DComponent>(me::components::Model3DComponent{ 0, me::Color::white });
+
+			// --- ADD MATERIAL COMPONENT TO MENU ---
+			if (!entity.try_get_component<me::components::MaterialComponent>() && ImGui::MenuItem("Material"))
+				entity.add_component<me::components::MaterialComponent>(me::components::MaterialComponent{});
 
 			if (!entity.try_get_component<me::components::CameraComponent>() && ImGui::MenuItem("Camera"))
 				entity.add_component<me::components::CameraComponent>(me::components::CameraComponent{});

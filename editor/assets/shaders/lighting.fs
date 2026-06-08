@@ -14,9 +14,15 @@ uniform sampler2D texture0;
 uniform vec4 colDiffuse;
 uniform vec3 viewPos;
 
+// --- MATERIAL UNIFORMS ---
+uniform int useMaterial;
+uniform vec4 matAlbedo;
+uniform float matRoughness;
+uniform float matMetallic;
+uniform float matEmission;
+
 // --- MULTIPLE LIGHTS SETUP ---
 #define MAX_LIGHTS 8
-
 struct Light {
     vec3 position;
     vec3 color;
@@ -33,33 +39,53 @@ uniform float dirLightIntensity;
 uniform int hasDirLight;
 
 void main() {
-    // Base texture color
     vec4 texelColor = texture(texture0, fragTexCoord);
-    vec3 baseColor = texelColor.rgb * colDiffuse.rgb * fragColor.rgb;
+    
+    // Core properties that will drive the lighting math
+    vec3 baseColor;
+    float roughness;
+    float metallic;
+    float emission;
+
+    // ==========================================
+    // EXACT MATCH TO RAYTRACER LOGIC
+    // ==========================================
+    if (useMaterial == 1) {
+        // Material is King: Ignore Shape Color
+        baseColor = matAlbedo.rgb * texelColor.rgb;
+        roughness = matRoughness;
+        metallic = matMetallic;
+        emission = matEmission;
+    } else {
+        // Fallback: Use Shape Color (passed via fragColor)
+        baseColor = fragColor.rgb * colDiffuse.rgb * texelColor.rgb;
+        roughness = 1.0; // Default to Matte chalk
+        metallic = 0.0;
+        emission = 0.0;
+    }
+
+    // PBR Approximations for OpenGL
+    float shininess = mix(4.0, 256.0, 1.0 - roughness); 
+    vec3 specColor = mix(vec3(1.0), baseColor, metallic);
 
     vec3 totalLighting = vec3(0.0);
     vec3 norm = normalize(fragNormal);
     vec3 viewDir = normalize(viewPos - fragPosition);
 
-    // Loop through every active point light in the scene
+    // --- LOOP POINT LIGHTS ---
     for (int i = 0; i < lightCount; i++) {
-        
-        // 1. Ambient
-        float ambientStrength = 0.1;
+        float ambientStrength = 0.05;
         vec3 ambient = ambientStrength * lights[i].color;
 
-        // 2. Diffuse
         vec3 lightDir = normalize(lights[i].position - fragPosition);
         float diff = max(dot(norm, lightDir), 0.0);
         vec3 diffuse = diff * lights[i].color * lights[i].intensity;
 
-        // 3. Specular
-        float specularStrength = 0.5;
+        float specularStrength = mix(1.0, 0.1, roughness); 
         vec3 reflectDir = reflect(-lightDir, norm);  
-        float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0);
-        vec3 specular = specularStrength * spec * lights[i].color * lights[i].intensity;  
+        float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+        vec3 specular = specularStrength * spec * specColor * lights[i].color * lights[i].intensity;  
 
-        // Distance attenuation
         float distance = length(lights[i].position - fragPosition);
         float attenuation = 1.0 / (1.0 + 0.09 * distance + 0.032 * (distance * distance));
         
@@ -70,25 +96,23 @@ void main() {
     if (hasDirLight == 1) {
         vec3 lightDir = normalize(-dirLightDir);
         
-        // 1. Ambient (Simulates scattered sky light)
         float ambientStrength = 0.15; 
         vec3 ambient = ambientStrength * dirLightColor;
         
-        // 2. Diffuse
         float diff = max(dot(norm, lightDir), 0.0);
         vec3 diffuse = diff * dirLightColor * dirLightIntensity;
         
-        // 3. Specular
+        float specularStrength = mix(1.0, 0.1, roughness);
         vec3 reflectDir = reflect(-lightDir, norm);
-        float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0);
-        vec3 specular = 0.5 * spec * dirLightColor * dirLightIntensity;
+        float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
+        vec3 specular = specularStrength * spec * specColor * dirLightColor * dirLightIntensity;
         
-        // Add to total
         totalLighting += (ambient + diffuse + specular); 
     }
 
-    // Combine the accumulated lighting with the base object color
-    vec3 result = totalLighting * baseColor;
+    // Combine lighting with base color, then add the glowing emission!
+    vec3 result = (totalLighting * baseColor) + (baseColor * emission);
+    
     result = clamp(result, 0.0, 1.0);
-    finalColor = vec4(result, texelColor.a * colDiffuse.a);
+    finalColor = vec4(result, 1.0);
 }

@@ -45,6 +45,7 @@ namespace me::components {
 		Vector3 last_position = { 0.0f, 0.0f, 0.0f };
 		Vector3 last_rotation = { 0.0f, 0.0f, 0.0f };
 		Vector3 last_scale = { 0.0f, 0.0f, 0.0f };
+		Quaternion last_rotation_quat = { 0.0f, 0.0f, 0.0f, 1.0f };
 
 		bool is_dirty = true;
 	};
@@ -97,6 +98,13 @@ namespace me::components {
 	struct Model3DComponent {
 		me::assets::ModelId model{};
 		me::Color tint = me::Color::white;
+	};
+
+	struct MaterialComponent {
+		me::Color albedo = me::Color::white; // Base color/tint
+		float roughness = 1.0f;              // 0.0 = Perfect Mirror, 1.0 = Matte/Chalk
+		float metallic = 0.0f;               // 0.0 = Plastic/Wood, 1.0 = Metal
+		float emission_power = 0.0f;         // Does it glow?
 	};
 
 } // namespace me::components

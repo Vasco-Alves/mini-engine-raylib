@@ -7,6 +7,7 @@
 
 #include <mini-engine-raylib/core/application.hpp>
 #include <mini-engine-raylib/ecs/components.hpp>
+#include <mini-engine-raylib/systems/raytracer_system.hpp>
 
 // --- Panels ---
 #include "editor/panels/scene_hierarchy_panel.hpp"
@@ -20,7 +21,8 @@ namespace editor {
 
 	enum class SceneState {
 		Edit = 0,
-		Play = 1
+		Play = 1,
+		Render = 2
 	};
 
 	class EditorApp : public me::Application {
@@ -66,9 +68,19 @@ namespace editor {
 		SceneState m_SceneState = SceneState::Edit;
 		std::vector<std::string> m_RecentProjects;
 
-		bool m_ShowNewSceneModal = false;
 		char m_NewSceneInput[256] = "my_new_scene";
 		int m_GizmoType = 7; // ImGuizmo::TRANSLATE
+
+		// --- Modals ---
+		bool m_ShowNewSceneModal = false;
+
+		// --- Export State Tracking ---
+		bool m_ShowExportModal = false;
+		bool m_IsExporting = false;
+		int m_ExportCurrentSample = 0;
+		int m_PreviewW = 0;
+		int m_PreviewH = 0;
+		std::string m_ExportPath = "";
 
 		// --- Camera ---
 		me::components::CameraComponent m_EditorCamera;
@@ -82,6 +94,9 @@ namespace editor {
 
 		// --- Physics ---
 		bool m_StepPhysicsNextFrame = false;
+
+		// --- Sub-Systems ---
+		me::systems::RaytracerSystem m_Raytracer;
 
 		// --- UI Panels ---
 		SceneHierarchyPanel m_HierarchyPanel;

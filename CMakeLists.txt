@@ -4,7 +4,7 @@ set(CMAKE_POLICY_DEFAULT_CMP0091 NEW)
 
 project(
     "mini-engine-raylib"
-    VERSION 0.10.0
+    VERSION 0.11.0
     DESCRIPTION "A simple game engine built with Raylib"
     LANGUAGES CXX
 )

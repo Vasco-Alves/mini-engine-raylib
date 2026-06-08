@@ -23,6 +23,7 @@ namespace editor {
 		void draw_audio_source(me::Entity entity, editor::CommandHistory& command_history);
 		void draw_audio_listener(me::Entity entity, editor::CommandHistory& command_history);
 		void draw_background_music(me::Entity entity, editor::CommandHistory& command_history);
+		void draw_material(me::Entity entity, editor::CommandHistory& command_history);
 
 		// Scripts and structural changes use custom or immediate logic, so they don't take the history object here yet
 		void draw_script(me::Entity entity);

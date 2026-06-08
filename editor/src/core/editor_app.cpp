@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <algorithm>
+#include <ctime>
 
 #include <mini-engine-raylib/core/engine.hpp>
 #include <mini-engine-raylib/core/vfs.hpp>
@@ -19,6 +20,7 @@
 #include <mini-engine-raylib/scene/scene_manager.hpp>
 #include <mini-engine-raylib/ecs/script_component.hpp>
 #include <mini-engine-raylib/ecs/audio_components.hpp>
+#include <mini-engine-raylib/ecs/physics_components.hpp>
 #include <mini-engine-raylib/systems/camera_system.hpp>
 #include <mini-engine-raylib/systems/physics_system.hpp>
 #include <mini-engine-raylib/systems/audio_system.hpp>
@@ -133,6 +135,13 @@ namespace editor {
 
 				m_StepPhysicsNextFrame = false;
 			}
+		}
+
+		// ==========================================
+		// RAYTRACER UPDATE
+		// ==========================================
+		if (m_SceneState == SceneState::Render) {
+			m_Raytracer.on_update(me::get_registry(), m_EditorCamera, m_EditorCameraTransform);
 		}
 
 		poll_shortcuts();
@@ -269,8 +278,69 @@ namespace editor {
 		m_BrowserPanel.on_imgui_render();
 		m_ConsolePanel.on_imgui_render();
 
-		// Pass the exact camera and selection state down into the Viewport
-		m_ViewportPanel.on_imgui_render(m_EditorCameraTransform, m_EditorCamera, selected_entity, m_GizmoType, m_CommandHistory);
+		int active_gizmo = (m_SceneState == SceneState::Edit) ? m_GizmoType : -1;
+		bool is_rendering = (m_SceneState == SceneState::Render);
+
+		m_ViewportPanel.on_imgui_render(
+			m_EditorCameraTransform,
+			m_EditorCamera,
+			selected_entity,
+			active_gizmo,
+			m_CommandHistory,
+			m_Raytracer.get_texture(), // Pass the texture pointer
+			is_rendering               // Pass the state boolean
+		);
+
+		// ==========================================
+		// RAYTRACER SETTINGS WINDOW
+		// ==========================================
+		if (m_SceneState == SceneState::Render) {
+			ImGui::Begin("Raytracer Settings");
+
+			ImGui::Text("Frames Accumulated: %d / %d", m_Raytracer.get_accumulated_frames(), m_Raytracer.preview_samples);
+
+			ImGui::Separator();
+			ImGui::Dummy(ImVec2(0, 5));
+
+			if (ImGui::Checkbox("Accumulate Data", &m_Raytracer.accumulate)) {
+				if (m_Raytracer.accumulate) m_Raytracer.reset_accumulation(&me::get_registry());
+			}
+
+			if (ImGui::SliderInt("Preview Samples", &m_Raytracer.preview_samples, 1, 500)) {
+				// If we lower the sample count below what we currently have, restart
+				if (m_Raytracer.get_accumulated_frames() > m_Raytracer.preview_samples) {
+					m_Raytracer.reset_accumulation();
+				}
+			}
+
+			// --- RESOLUTION SCALE SLIDER ---
+			if (ImGui::SliderFloat("Resolution Scale", &m_Raytracer.resolution_scale, 0.1f, 1.0f, "%.2f")) {
+				int new_w = (int)(m_ViewportPanel.get_bounds().x * m_Raytracer.resolution_scale);
+				int new_h = (int)(m_ViewportPanel.get_bounds().y * m_Raytracer.resolution_scale);
+				if (new_w < 1) new_w = 1;
+				if (new_h < 1) new_h = 1;
+
+				m_Raytracer.on_stop();
+				m_Raytracer.on_start(new_w, new_h);
+			}
+
+			if (ImGui::SliderInt("Max Bounces", &m_Raytracer.max_bounces, 1, 10)) {
+				m_Raytracer.reset_accumulation();
+			}
+
+			ImGui::Dummy(ImVec2(0, 10));
+			ImGui::Separator();
+			ImGui::Dummy(ImVec2(0, 10));
+
+			// Export Image Button
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.0f));
+			if (ImGui::Button("Export to PNG", ImVec2(-1, 30))) {
+				m_ShowExportModal = true;
+			}
+			ImGui::PopStyleColor();
+
+			ImGui::End();
+		}
 
 		draw_modals();
 
@@ -306,12 +376,12 @@ namespace editor {
 					on_stop();
 			}
 
-			// Undo (Crtl + Z)
+			// Undo (Ctrl + Z)
 			if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_Z)) {
 				m_CommandHistory.Undo();
 			}
 
-			// Redo (Crtl + Y)
+			// Redo (Ctrl + Y)
 			if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_Y)) {
 				m_CommandHistory.Redo();
 			}
@@ -354,27 +424,67 @@ namespace editor {
 				auto new_ent = reg.create_entity();
 				new_ent.add_component<me::components::TagComponent>({ new_name });
 
+				// Transform
 				if (auto* t = reg.try_get_component<me::components::TransformComponent>(selected))
 					new_ent.add_component<me::components::TransformComponent>(*t);
+
+				// --- 3D Graphics ---
 				if (auto* s = reg.try_get_component<me::components::Shape3DComponent>(selected))
 					new_ent.add_component<me::components::Shape3DComponent>(*s);
+
 				if (auto* m = reg.try_get_component<me::components::Model3DComponent>(selected))
 					new_ent.add_component<me::components::Model3DComponent>(*m);
+
+				if (auto* mat = reg.try_get_component<me::components::MaterialComponent>(selected))
+					new_ent.add_component<me::components::MaterialComponent>(*mat);
+
+				// --- Lighting ---
 				if (auto* l = reg.try_get_component<me::components::LightComponent>(selected))
 					new_ent.add_component<me::components::LightComponent>(*l);
+
 				if (auto* dl = reg.try_get_component<me::components::DirectionalLightComponent>(selected))
 					new_ent.add_component<me::components::DirectionalLightComponent>(*dl);
+
+				// --- Cameras ---
 				if (auto* c = reg.try_get_component<me::components::CameraComponent>(selected))
 					new_ent.add_component<me::components::CameraComponent>(*c);
-				if (auto* s2 = reg.try_get_component<me::components::Shape2DComponent>(selected))
-					new_ent.add_component<me::components::Shape2DComponent>(*s2);
-				if (auto* sp = reg.try_get_component<me::components::SpriteComponent>(selected))
-					new_ent.add_component<me::components::SpriteComponent>(*sp);
+
 				if (auto* c2 = reg.try_get_component<me::components::Camera2DComponent>(selected))
 					new_ent.add_component<me::components::Camera2DComponent>(*c2);
+
+				// --- 2D Graphics ---
+				if (auto* s2 = reg.try_get_component<me::components::Shape2DComponent>(selected))
+					new_ent.add_component<me::components::Shape2DComponent>(*s2);
+
+				if (auto* sp = reg.try_get_component<me::components::SpriteComponent>(selected))
+					new_ent.add_component<me::components::SpriteComponent>(*sp);
+
+				// --- Physics ---
+				if (auto* rb = reg.try_get_component<me::components::RigidBodyComponent>(selected))
+					new_ent.add_component<me::components::RigidBodyComponent>(*rb);
+
+				if (auto* bc = reg.try_get_component<me::components::BoxColliderComponent>(selected))
+					new_ent.add_component<me::components::BoxColliderComponent>(*bc);
+
+				if (auto* sc = reg.try_get_component<me::components::SphereColliderComponent>(selected))
+					new_ent.add_component<me::components::SphereColliderComponent>(*sc);
+
+				// --- Audio ---
+				if (auto* al = reg.try_get_component<me::components::AudioListenerComponent>(selected))
+					new_ent.add_component<me::components::AudioListenerComponent>(*al);
+
+				if (auto* as = reg.try_get_component<me::components::AudioSourceComponent>(selected))
+					new_ent.add_component<me::components::AudioSourceComponent>(*as);
+
+				if (auto* bgm = reg.try_get_component<me::components::BackgroundMusicComponent>(selected))
+					new_ent.add_component<me::components::BackgroundMusicComponent>(*bgm);
+
+				// --- Scripts (Special handling for vector of instances) ---
 				if (auto* sc = reg.try_get_component<me::components::ScriptComponent>(selected)) {
 					me::components::ScriptComponent new_sc;
-					for (const auto& script : sc->scripts) new_sc.scripts.push_back({ script.path });
+					for (const auto& script : sc->scripts) {
+						new_sc.scripts.push_back({ script.path });
+					}
 					new_ent.add_component<me::components::ScriptComponent>(new_sc);
 				}
 
@@ -454,6 +564,26 @@ namespace editor {
 		cube.add_component(me::components::TagComponent{ "Cube" });
 		cube.add_component(me::components::TransformComponent{ {0.0f, 0.05f, 0.0f}, {0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f} });
 		cube.add_component(me::components::Shape3DComponent{ me::components::Shape3DComponent::Cube, me::Color::white });
+
+		// Grid of colorfull balls
+		//for (int x = 0; x < 10; ++x) {
+		//	for (int y = 0; y < 10; ++y) {
+		//		for (int z = 0; z < 10; ++z) {
+		//			auto e = me::get_registry().create_entity();
+
+		//			me::components::TransformComponent t;
+		//			t.position = { x * 2.5f - 10.0f, y * 2.5f, z * 2.5f - 10.0f };
+		//			t.scale = { 1.0f, 1.0f, 1.0f };
+		//			t.is_dirty = true;
+		//			me::get_registry().add_component(e, t);
+
+		//			me::components::Shape3DComponent s;
+		//			s.type = me::components::Shape3DComponent::Sphere;
+		//			s.color = me::Color{ (unsigned char)(x * 25), (unsigned char)(y * 25), (unsigned char)(z * 25), 255 };
+		//			me::get_registry().add_component(e, s);
+		//		}
+		//	}
+		//}
 	}
 
 	void EditorApp::save_scene() const { me::scene_manager::save(m_CurrentScenePath); }
@@ -599,43 +729,113 @@ namespace editor {
 	void EditorApp::draw_toolbar() {
 		ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(0, 0));
 		ImGui::SetNextWindowBgAlpha(0.0f);
+
+		// Create the toolbar window
 		ImGui::Begin("##Toolbar", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
 		float button_size = 26.0f;
 
+		// ==========================================
+		// GIZMO CONTROLS (Left Aligned)
+		// ==========================================
+		bool can_edit = (m_SceneState == SceneState::Edit);
+		if (!can_edit) ImGui::BeginDisabled();
+
+		// Translate (T)
 		ImGui::PushStyleColor(ImGuiCol_Button, m_GizmoType == ImGuizmo::TRANSLATE ? ImVec4(0.2f, 0.6f, 0.9f, 1.0f) : ImVec4(0.16f, 0.16f, 0.21f, 1.0f));
 		if (ImGui::Button("T", ImVec2(button_size, button_size))) m_GizmoType = ImGuizmo::TRANSLATE;
-		ImGui::PopStyleColor(); ImGui::SameLine(0, 5);
+		ImGui::PopStyleColor();
+		ImGui::SameLine(0, 5);
 
+		// Rotate (R)
 		ImGui::PushStyleColor(ImGuiCol_Button, m_GizmoType == ImGuizmo::ROTATE ? ImVec4(0.2f, 0.6f, 0.9f, 1.0f) : ImVec4(0.16f, 0.16f, 0.21f, 1.0f));
 		if (ImGui::Button("R", ImVec2(button_size, button_size))) m_GizmoType = ImGuizmo::ROTATE;
-		ImGui::PopStyleColor(); ImGui::SameLine(0, 5);
+		ImGui::PopStyleColor();
+		ImGui::SameLine(0, 5);
 
+		// Scale (S)
 		ImGui::PushStyleColor(ImGuiCol_Button, m_GizmoType == ImGuizmo::SCALE ? ImVec4(0.2f, 0.6f, 0.9f, 1.0f) : ImVec4(0.16f, 0.16f, 0.21f, 1.0f));
 		if (ImGui::Button("S", ImVec2(button_size, button_size))) m_GizmoType = ImGuizmo::SCALE;
 		ImGui::PopStyleColor();
 
+		if (!can_edit) ImGui::EndDisabled();
+
+		// ==========================================
+		// MAIN STATE CONTROLS (Center Aligned)
+		// ==========================================
 		if (m_SceneState == SceneState::Edit) {
-			ImGui::SameLine((ImGui::GetWindowContentRegionMax().x * 0.5f) - (60 * 0.5f));
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
-			if (ImGui::Button("PLAY", ImVec2(60, button_size))) { on_play(); me::set_paused(false); }
-			ImGui::PopStyleColor();
-		} else {
-			float total_width = 60 + 5 + 60 + 5 + 60;
+
+			// Layout: [ PLAY ] [ RENDER ]
+			float total_width = 60.0f + 5.0f + 60.0f;
 			ImGui::SameLine((ImGui::GetWindowContentRegionMax().x * 0.5f) - (total_width * 0.5f));
 
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
-			if (ImGui::Button("STOP", ImVec2(60, button_size))) on_stop();
-			ImGui::PopStyleColor(); ImGui::SameLine(0, 5);
+			// PLAY Button
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.2f, 1.0f));
+			if (ImGui::Button("PLAY", ImVec2(60, button_size))) {
+				m_SceneState = SceneState::Play;
+				on_play();
+				me::set_paused(false);
+			}
+			ImGui::PopStyleColor();
 
+			ImGui::SameLine(0, 5);
+
+			// RENDER Button
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.2f, 0.8f, 1.0f));
+			if (ImGui::Button("RENDER", ImVec2(60, button_size))) {
+				m_SceneState = SceneState::Render;
+
+				// Get the raw bounds of the viewport
+				float raw_width = m_ViewportPanel.get_bounds().x;
+				float raw_height = m_ViewportPanel.get_bounds().y;
+
+				// Fallback in case the viewport isn't initialized properly yet
+				if (raw_width <= 0 || raw_height <= 0) {
+					raw_width = 1280.0f;
+					raw_height = 720.0f;
+				}
+
+				// Apply the resolution scale
+				int scaled_width = (int)(raw_width * m_Raytracer.resolution_scale);
+				int scaled_height = (int)(raw_height * m_Raytracer.resolution_scale);
+
+				// Safeguard against 0-pixel rendering
+				if (scaled_width < 1) scaled_width = 1;
+				if (scaled_height < 1) scaled_height = 1;
+
+				m_Raytracer.on_start(scaled_width, scaled_height);
+				m_Raytracer.reset_accumulation(&me::get_registry());
+			}
+			ImGui::PopStyleColor();
+
+		} else if (m_SceneState == SceneState::Play) {
+
+			// Layout: [ STOP ] [ PAUSE/RESUME ] [ STEP ]
+			float total_width = 60.0f + 5.0f + 60.0f + 5.0f + 60.0f;
+			ImGui::SameLine((ImGui::GetWindowContentRegionMax().x * 0.5f) - (total_width * 0.5f));
+
+			// STOP Button
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
+			if (ImGui::Button("STOP", ImVec2(60, button_size))) {
+				on_stop();
+				m_SceneState = SceneState::Edit; // Return to Edit mode
+			}
+			ImGui::PopStyleColor();
+
+			ImGui::SameLine(0, 5);
+
+			// PAUSE/RESUME Button
 			bool is_paused = me::is_paused();
 			ImGui::PushStyleColor(ImGuiCol_Button, is_paused ? ImVec4(0.2f, 0.6f, 0.9f, 1.0f) : ImVec4(0.8f, 0.6f, 0.1f, 1.0f));
 			if (ImGui::Button(is_paused ? "RESUME" : "PAUSE", ImVec2(60, button_size))) {
 				me::set_paused(!is_paused);
 				me::get_event_bus().publish<me::events::PauseStateChangedEvent>(!is_paused);
 			}
-			ImGui::PopStyleColor(); ImGui::SameLine(0, 5);
+			ImGui::PopStyleColor();
 
+			ImGui::SameLine(0, 5);
+
+			// STEP Button
 			if (!is_paused) ImGui::BeginDisabled();
 			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
 			if (ImGui::Button("STEP", ImVec2(60, button_size))) {
@@ -644,15 +844,34 @@ namespace editor {
 			}
 			ImGui::PopStyleColor();
 			if (!is_paused) ImGui::EndDisabled();
+
+		} else if (m_SceneState == SceneState::Render) {
+
+			// Layout: [ STOP RENDER ]
+			float total_width = 100.0f;
+			ImGui::SameLine((ImGui::GetWindowContentRegionMax().x * 0.5f) - (total_width * 0.5f));
+
+			// STOP RENDER Button
+			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.2f, 0.2f, 1.0f));
+			if (ImGui::Button("STOP RENDER", ImVec2(100, button_size))) {
+				m_Raytracer.on_stop();           // Free the VRAM and vectors
+				m_SceneState = SceneState::Edit; // Return to Edit mode safely
+			}
+			ImGui::PopStyleColor();
 		}
+
 		ImGui::End();
 		ImGui::PopStyleVar(1);
 	}
 
 	void EditorApp::draw_modals() {
-		if (m_ShowNewSceneModal) ImGui::OpenPopup("Create New Scene");
+		// Center modals on the screen
 		ImGui::SetNextWindowPos(ImVec2(GetScreenWidth() / 2.0f, GetScreenHeight() / 2.0f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
+		// ==========================================
+		// CREATE NEW SCENE MODAL
+		// ==========================================
+		if (m_ShowNewSceneModal) ImGui::OpenPopup("Create New Scene");
 		if (ImGui::BeginPopupModal("Create New Scene", &m_ShowNewSceneModal, ImGuiWindowFlags_AlwaysAutoResize)) {
 			ImGui::Text("Enter scene name:");
 			ImGui::InputText("##SceneName", m_NewSceneInput, sizeof(m_NewSceneInput));
@@ -669,6 +888,96 @@ namespace editor {
 			}
 			ImGui::SameLine();
 			if (ImGui::Button("Cancel", ImVec2(120, 0))) { m_ShowNewSceneModal = false; ImGui::CloseCurrentPopup(); }
+			ImGui::EndPopup();
+		}
+
+		// ==========================================
+	// 2. EXPORT RENDER MODAL (Settings)
+	// ==========================================
+		if (m_ShowExportModal) ImGui::OpenPopup("Export High-Res Render");
+		if (ImGui::BeginPopupModal("Export High-Res Render", &m_ShowExportModal, ImGuiWindowFlags_AlwaysAutoResize)) {
+
+			ImGui::Text("Export Settings");
+			ImGui::Separator();
+			ImGui::Dummy(ImVec2(0, 5));
+
+			ImGui::InputInt("Width", &m_Raytracer.export_width);
+			ImGui::InputInt("Height", &m_Raytracer.export_height);
+			ImGui::InputInt("Samples (Rays per Pixel)", &m_Raytracer.export_samples);
+			ImGui::InputInt("Max Bounces", &m_Raytracer.max_bounces);
+
+			ImGui::Dummy(ImVec2(0, 10));
+
+			if (ImGui::Button("Render & Save", ImVec2(120, 0))) {
+
+				// 1. Create directory and filename
+				std::string renders_dir = (m_ProjectPath / "renders").string();
+				if (!me::fs::exists(renders_dir)) me::fs::create_directory(renders_dir);
+
+				auto now = std::time(nullptr);
+				char time_str[64];
+				std::strftime(time_str, sizeof(time_str), "%Y%m%d_%H%M%S", std::localtime(&now));
+				m_ExportPath = (m_ProjectPath / "renders" / (std::string("render_") + time_str + ".png")).string();
+
+				// 2. Save Preview Resolution
+				m_PreviewW = m_Raytracer.get_width();
+				m_PreviewH = m_Raytracer.get_height();
+
+				// 3. Re-initialize buffers for High-Res
+				m_Raytracer.on_stop();
+				m_Raytracer.on_start(m_Raytracer.export_width, m_Raytracer.export_height);
+
+				// 4. TRIGGER THE EXPORT STATE (Do NOT run a for-loop here!)
+				m_IsExporting = true;
+				m_ExportCurrentSample = 0;
+
+				m_ShowExportModal = false;
+				ImGui::CloseCurrentPopup();
+			}
+
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+				m_ShowExportModal = false;
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndPopup();
+		}
+
+		// ==========================================
+		// EXPORTING PROGRESS BAR (The Render Loop)
+		// ==========================================
+		if (m_IsExporting) ImGui::OpenPopup("Rendering...");
+
+		if (ImGui::BeginPopupModal("Rendering...", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs)) {
+
+			ImGui::Text("Rendering High-Resolution Image (%dx%d)", m_Raytracer.export_width, m_Raytracer.export_height);
+			ImGui::Dummy(ImVec2(0, 5));
+
+			// Calculate progress (0.0 to 1.0)
+			float progress = (float)m_ExportCurrentSample / (float)m_Raytracer.export_samples;
+			ImGui::ProgressBar(progress, ImVec2(300, 20));
+			ImGui::Text("Calculating sample: %d / %d", m_ExportCurrentSample, m_Raytracer.export_samples);
+
+			// --- THE FIX: Render a "Chunk" of samples before drawing the UI ---
+			int samples_per_frame = 10; // Adjust this! 10 is a great balance of speed vs responsive UI.
+
+			for (int i = 0; i < samples_per_frame; ++i) {
+				if (m_ExportCurrentSample < m_Raytracer.export_samples) {
+
+					m_Raytracer.on_update(me::get_registry(), m_EditorCamera, m_EditorCameraTransform);
+					m_ExportCurrentSample++;
+
+				} else {
+					// WE ARE DONE!
+					m_Raytracer.export_to_png(m_ExportPath);
+					m_Raytracer.on_stop();
+					m_Raytracer.on_start(m_PreviewW, m_PreviewH);
+					m_IsExporting = false;
+					ImGui::CloseCurrentPopup();
+					break; // Exit the chunk loop early if we finish
+				}
+			}
+
 			ImGui::EndPopup();
 		}
 	}

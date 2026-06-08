@@ -19,6 +19,13 @@ namespace me::render {
 	static bool s_LightingEnabled = true;
 	static int s_ViewPosLoc;
 
+	// Material Uniforms
+	static int s_UseMaterialLoc;
+	static int s_MatAlbedoLoc;
+	static int s_MatRoughnessLoc;
+	static int s_MatMetallicLoc;
+	static int s_MatEmissionLoc;
+
 	// Point Lights
 #define MAX_LIGHTS 8
 	static int s_LightCountLoc;
@@ -26,7 +33,7 @@ namespace me::render {
 	static int s_LightColorLoc[MAX_LIGHTS];
 	static int s_LightIntensityLoc[MAX_LIGHTS];
 
-	// Directional Light (The Sun)
+	// Directional Light
 	static int s_DirLightDirLoc;
 	static int s_DirLightColorLoc;
 	static int s_DirLightIntensityLoc;
@@ -46,6 +53,13 @@ namespace me::render {
 
 		// 3. Cache Uniforms
 		s_ViewPosLoc = GetShaderLocation(s_LightingShader, "viewPos");
+
+		s_UseMaterialLoc = GetShaderLocation(s_LightingShader, "useMaterial");
+		s_MatAlbedoLoc = GetShaderLocation(s_LightingShader, "matAlbedo");
+		s_MatRoughnessLoc = GetShaderLocation(s_LightingShader, "matRoughness");
+		s_MatMetallicLoc = GetShaderLocation(s_LightingShader, "matMetallic");
+		s_MatEmissionLoc = GetShaderLocation(s_LightingShader, "matEmission");
+
 		s_LightCountLoc = GetShaderLocation(s_LightingShader, "lightCount");
 
 		for (int i = 0; i < MAX_LIGHTS; i++) {
@@ -130,7 +144,7 @@ namespace me::render {
 			}
 			SetShaderValue(s_LightingShader, s_LightCountLoc, &active_lights, SHADER_UNIFORM_INT);
 
-			// --- B. Directional Light (The Sun) ---
+			// --- B. Directional Light ---
 			int has_dir_light = 0;
 			auto& dir_pool = reg.view<me::components::DirectionalLightComponent>();
 			if (dir_pool.size() > 0) {
@@ -141,11 +155,7 @@ namespace me::render {
 
 					float pitch = t->rotation.x * DEG2RAD;
 					float yaw = t->rotation.y * DEG2RAD;
-					Vector3 dir = {
-						std::cos(pitch) * std::sin(yaw),
-						-std::sin(pitch),
-						std::cos(pitch) * std::cos(yaw)
-					};
+					Vector3 dir = { std::cos(pitch) * std::sin(yaw), -std::sin(pitch), std::cos(pitch) * std::cos(yaw) };
 					dir = Vector3Normalize(dir);
 
 					Vector3 col = { dl.color.r / 255.0f, dl.color.g / 255.0f, dl.color.b / 255.0f };
@@ -156,6 +166,24 @@ namespace me::render {
 			}
 			SetShaderValue(s_LightingShader, s_HasDirLightLoc, &has_dir_light, SHADER_UNIFORM_INT);
 		}
+
+		// Helper Lambda to bind the material per-object
+		auto bind_material = [&](me::entity::entity_id e) {
+			if (!s_LightingEnabled) return;
+
+			if (auto* mat = reg.try_get_component<me::components::MaterialComponent>(e)) {
+				int useMat = 1;
+				Vector4 albedo = { mat->albedo.r / 255.0f, mat->albedo.g / 255.0f, mat->albedo.b / 255.0f, mat->albedo.a / 255.0f };
+				SetShaderValue(s_LightingShader, s_UseMaterialLoc, &useMat, SHADER_UNIFORM_INT);
+				SetShaderValue(s_LightingShader, s_MatAlbedoLoc, &albedo, SHADER_UNIFORM_VEC4);
+				SetShaderValue(s_LightingShader, s_MatRoughnessLoc, &mat->roughness, SHADER_UNIFORM_FLOAT);
+				SetShaderValue(s_LightingShader, s_MatMetallicLoc, &mat->metallic, SHADER_UNIFORM_FLOAT);
+				SetShaderValue(s_LightingShader, s_MatEmissionLoc, &mat->emission_power, SHADER_UNIFORM_FLOAT);
+			} else {
+				int useMat = 0;
+				SetShaderValue(s_LightingShader, s_UseMaterialLoc, &useMat, SHADER_UNIFORM_INT);
+			}
+			};
 
 		// ==========================================
 		// 3. RENDER SCENE
@@ -172,6 +200,12 @@ namespace me::render {
 			auto& mesh = meshPool.components[i];
 			auto* t = reg.try_get_component<me::components::TransformComponent>(e);
 			if (!t) continue;
+
+			// Force Raylib to draw waiting geometry before we change shader uniforms
+			rlDrawRenderBatchActive();
+
+			// Send material data to the shader
+			bind_material(e);
 
 			::Color col = to_ray(mesh.color);
 			rlPushMatrix();
@@ -199,6 +233,8 @@ namespace me::render {
 			auto& modComp = modelPool.components[i];
 			auto* t = reg.try_get_component<me::components::TransformComponent>(e);
 			if (!t) continue;
+
+			bind_material(e);
 
 			const ::Model* const_model = me::assets::internal_get_model(modComp.model);
 			if (const_model) {

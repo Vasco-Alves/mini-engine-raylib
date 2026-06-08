@@ -130,7 +130,6 @@ namespace editor {
 				// --- DOUBLE CLICKS ---
 				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
 					if (ext == ".json") {
-
 						// 1. Load the scene via the Scene Manager
 						me::scene_manager::load(path.string());
 
@@ -145,10 +144,8 @@ namespace editor {
 						auto e = reg.create_entity();
 						e.add_component(me::components::TagComponent{ path.stem().string() });
 						e.add_component(me::components::TransformComponent{ {0,0,0}, {0,0,0}, {1,1,1} });
-						e.add_component(me::components::Model3DComponent{
-							me::assets::load_model(relative_vfs.c_str()),
-							me::Color::white
-							});
+						e.add_component(me::components::Model3DComponent{ me::assets::load_model(relative_vfs.c_str()), me::Color::white });
+
 					} else if (ext == ".wav" || ext == ".ogg" || ext == ".mp3") {
 						// Instantly preview audio files at 100% volume in the center of the stereo field
 						std::string relative_vfs = "game://" + std::filesystem::relative(path, m_ProjectPath / "assets").string();

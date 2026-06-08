@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 # Untitled
 
+## [0.11.0] - 2026-05-08
+
+Added raytracing!
+
+When editing the scene, now the user can click the button "RENDER" to enter raytracing mode and see the scene. It is posible to change configuration and to export to a PNG.
+
+The raytracing system will check first if an object has a `MaterialComponent`. Currently only supports the use of primitive engine shapes: `Sphere`, `Plane` and `Cube`.
+
 ## [0.10.0] - 2026-05-24
 
 A monumental update that transforms the engine from a static visualizer into a fully interactive simulation. This release integrates a AAA physics backend (Jolt Physics), establishes a bidirectional bridge between the ECS and the physics world, and introduces a hot-reloading Lua scripting environment to drive gameplay logic.
