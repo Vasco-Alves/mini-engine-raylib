@@ -105,6 +105,9 @@ namespace me::components {
 		float roughness = 1.0f;              // 0.0 = Perfect Mirror, 1.0 = Matte/Chalk
 		float metallic = 0.0f;               // 0.0 = Plastic/Wood, 1.0 = Metal
 		float emission_power = 0.0f;         // Does it glow?
+		// Glass & Refraction
+		float transmission = 0.0f;           // 0.0 = Solid Opaque, 1.0 = Fully Transparent Glass
+		float ior = 1.5f;                    // Index of Refraction (1.0=Air, 1.33=Water, 1.5=Glass, 2.4=Diamond)
 	};
 
 } // namespace me::components

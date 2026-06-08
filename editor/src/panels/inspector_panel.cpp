@@ -23,10 +23,7 @@ namespace editor {
 			draw_transform(selected_entity, command_history);
 			draw_shape3d(selected_entity, command_history);
 			draw_model3d(selected_entity, command_history);
-
-			// --- NEW MATERIAL PANEL ---
 			draw_material(selected_entity, command_history);
-
 			draw_light(selected_entity, command_history);
 			draw_directional_light(selected_entity, command_history);
 			draw_rigidbody(selected_entity, command_history);
@@ -207,6 +204,16 @@ namespace editor {
 
 				// Emission
 				ImGui::DragFloat("Emission Power", &mat->emission_power, 0.1f, 0.0f, 100.0f);
+				if (ImGui::IsItemActivated()) start_state = *mat;
+				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
+
+				// Transmission (Slider 0 to 1)
+				ImGui::SliderFloat("Transmission (Glass)", &mat->transmission, 0.0f, 1.0f);
+				if (ImGui::IsItemActivated()) start_state = *mat;
+				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
+
+				// Index of Refraction (Drag 1.0 to 3.0)
+				ImGui::DragFloat("IOR", &mat->ior, 0.01f, 1.0f, 3.0f, "%.2f");
 				if (ImGui::IsItemActivated()) start_state = *mat;
 				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
 

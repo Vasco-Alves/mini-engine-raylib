@@ -79,7 +79,7 @@ namespace me {
 					};
 				}
 
-				// --- NEW: Material ---
+				// --- Material ---
 				if (auto* mat = reg.try_get_component<me::components::MaterialComponent>(e)) {
 					comps["Material"] = json{
 						{"color_r", mat->albedo.r},
@@ -88,7 +88,9 @@ namespace me {
 						{"color_a", mat->albedo.a},
 						{"roughness", mat->roughness},
 						{"metallic", mat->metallic},
-						{"emission_power", mat->emission_power}
+						{"emission_power", mat->emission_power},
+						{"transmission", mat->transmission},
+						{"ior", mat->ior}
 					};
 				}
 
@@ -332,7 +334,7 @@ namespace me {
 					e.add_component(mc);
 				}
 
-				// --- NEW: Material ---
+				// --- Material ---
 				if (comps.contains("Material")) {
 					auto& j = comps["Material"];
 					me::components::MaterialComponent mat;
@@ -345,6 +347,9 @@ namespace me {
 					mat.roughness = j.value("roughness", 1.0f);
 					mat.metallic = j.value("metallic", 0.0f);
 					mat.emission_power = j.value("emission_power", 0.0f);
+					mat.transmission = j.value("transmission", 0.0f);
+					mat.ior = j.value("ior", 1.5f);
+
 					e.add_component(mat);
 				}
 

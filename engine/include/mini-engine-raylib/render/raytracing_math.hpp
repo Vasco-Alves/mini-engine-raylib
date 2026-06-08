@@ -20,6 +20,17 @@ namespace me::raytracing {
 		Vector3 base_color;
 		float   roughness;
 		Vector3 emission;
+		float   transmission;
+		float   ior;
+		bool    front_face; // Are we entering the glass, or exiting it?
+	};
+
+	// A raw 3D Triangle
+	struct Triangle {
+		Vector3 v0;
+		Vector3 v1;
+		Vector3 v2;
+		// TODO: add normals and UVs here for texturing
 	};
 
 	// Axis-Aligned Bounding Box (Used for the BVH)
@@ -76,10 +87,44 @@ namespace me::raytracing {
 	bool  intersect_plane(const Vector3& ray_origin, const Vector3& ray_dir, const Vector3& center, const Vector3& normal, float& out_t);
 	bool  intersect_obb(const Vector3& ray_origin, const Vector3& ray_dir, const Matrix& model_matrix, float& out_t, Vector3& out_normal);
 	float intersect_aabb(const Vector3& ray_origin, const Vector3& ray_dir, const AABB& box); // legacy, kept for compat
+	bool intersect_triangle(const Vector3& ray_origin, const Vector3& ray_dir, const Vector3& v0, const Vector3& v1, const Vector3& v2, float& out_t, float& out_u, float& out_v);
+	Vector3 refract(const Vector3& uv, const Vector3& n, float etai_over_etat);
+	float   reflectance(float cosine, float ref_idx);
 
-	// --- Monte Carlo / Lighting Helpers ---
-	float   random_float();
-	Vector3 random_unit_vector();
+	// --- Quasi-Monte Carlo
+	inline uint32_t pcg_hash(uint32_t& seed) {
+		uint32_t state = seed * 747796405u + 2891336453u;
+		uint32_t word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+		seed = (word >> 22u) ^ word;
+		return seed;
+	}
+
+	inline float random_float(uint32_t& seed) {
+		return (float)pcg_hash(seed) / (float)UINT32_MAX;
+	}
+
+	inline Vector3 random_unit_vector(uint32_t& seed) {
+		while (true) {
+			Vector3 p = { random_float(seed) * 2.0f - 1.0f, random_float(seed) * 2.0f - 1.0f, random_float(seed) * 2.0f - 1.0f };
+			float len_sq = Vector3DotProduct(p, p);
+			if (len_sq > 0.001f && len_sq <= 1.0f) {
+				float inv_len = 1.0f / std::sqrt(len_sq);
+				return Vector3{ p.x * inv_len, p.y * inv_len, p.z * inv_len };
+			}
+		}
+	}
+
+	inline float halton(uint32_t index, uint32_t base) {
+		float f = 1.0f;
+		float r = 0.0f;
+		while (index > 0) {
+			f = f / (float)base;
+			r = r + f * (float)(index % base);
+			index = index / base;
+		}
+		return r;
+	}
+
 	Vector3 sample_sky(const Vector3& dir);
 
 } // namespace me::raytracing

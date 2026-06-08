@@ -104,8 +104,15 @@ namespace me::systems {
 			for (int x = 0; x < m_Width; ++x) {
 				int index = y * m_Width + x;
 
-				me::raytracing::Ray ray = generate_camera_ray(x, y, m_Width, m_Height, camera, cam_transform);
-				Vector3 light = trace_ray(ray, 0);
+				// 1. Initialize the ultra-fast PCG state for this specific pixel & frame
+				//uint32_t seed = y * m_Width + x + m_FrameCount * 719393;
+				uint32_t seed = y * m_Width + x + m_TotalFramesRendered * 719393;
+
+				// 2. Generate the QMC Anti-Aliased Camera Ray
+				me::raytracing::Ray ray = generate_camera_ray(x, y, m_Width, m_Height, camera, cam_transform, m_FrameCount);
+
+				// 3. Trace the ray using the seed
+				Vector3 light = trace_ray(ray, 0, seed);
 
 				m_AccumulationBuffer[index].x += light.x;
 				m_AccumulationBuffer[index].y += light.y;
@@ -117,7 +124,25 @@ namespace me::systems {
 					m_AccumulationBuffer[index].z / (float)m_FrameCount
 				};
 
-				// Gamma correction (approx gamma 2.2 via sqrt).
+				// --- 1. TONEMAPPING (ACES Filmic) ---
+				float exposure = 0.6f; // Tweak this if the scene is too bright or dark
+				avg.x *= exposure;
+				avg.y *= exposure;
+				avg.z *= exposure;
+
+				// ACES math constants
+				const float a = 2.51f;
+				const float b = 0.03f;
+				const float c = 2.43f;
+				const float d = 0.59f;
+				const float e = 0.14f;
+
+				// Apply ACES curve
+				avg.x = (avg.x * (a * avg.x + b)) / (avg.x * (c * avg.x + d) + e);
+				avg.y = (avg.y * (a * avg.y + b)) / (avg.y * (c * avg.y + d) + e);
+				avg.z = (avg.z * (a * avg.z + b)) / (avg.z * (c * avg.z + d) + e);
+
+				// --- Gamma Correction (approx gamma 2.2 via sqrt) ---
 				// Linear light accumulation looks washed out on a display —
 				// sqrt maps it into the perceptual range monitors expect.
 				avg.x = std::sqrt(std::max(0.0f, avg.x));
@@ -137,15 +162,24 @@ namespace me::systems {
 
 		if (accumulate) m_FrameCount++;
 
+		m_TotalFramesRendered++;
+
 		m_ActiveRegistry = nullptr;
 	}
 
 	me::raytracing::Ray RaytracerSystem::generate_camera_ray(
 		int x, int y, int width, int height,
 		const me::components::CameraComponent& camera,
-		const me::components::TransformComponent& cam_transform) {
-		float ndc_x = (2.0f * (x + 0.5f) / (float)width) - 1.0f;
-		float ndc_y = 1.0f - (2.0f * (y + 0.5f) / (float)height);
+		const me::components::TransformComponent& cam_transform,
+		uint32_t frame_count) {
+		// QMC Jitter: Use Base 2 for X and Base 3 for Y
+		// This smoothly perfectly covers the pixel area over time!
+		float jitter_x = me::raytracing::halton(frame_count, 2) - 0.5f;
+		float jitter_y = me::raytracing::halton(frame_count, 3) - 0.5f;
+
+		// Add jitter to the pixel center
+		float ndc_x = (2.0f * (x + 0.5f + jitter_x) / (float)width) - 1.0f;
+		float ndc_y = 1.0f - (2.0f * (y + 0.5f + jitter_y) / (float)height);
 
 		float aspect = (float)width / (float)height;
 		float scale = std::tan((camera.fov * 0.5f) * DEG2RAD);
@@ -169,7 +203,7 @@ namespace me::systems {
 		return { cam_transform.position, Vector3Normalize(dir) };
 	}
 
-	Vector3 RaytracerSystem::trace_ray(const me::raytracing::Ray& ray, int depth) {
+	Vector3 RaytracerSystem::trace_ray(const me::raytracing::Ray& ray, int depth, uint32_t& seed) {
 		using namespace me::raytracing;
 
 		if (depth >= max_bounces)
@@ -215,7 +249,14 @@ namespace me::systems {
 			if (!lt) continue;
 
 			auto& l = light_pool.components[i];
-			Vector3 lcolor = { l.color.r / 255.0f, l.color.g / 255.0f, l.color.b / 255.0f };
+
+			//Vector3 lcolor = { l.color.r / 255.0f, l.color.g / 255.0f, l.color.b / 255.0f };
+			Vector3 lcolor = {
+				std::pow(l.color.r / 255.0f, 2.2f),
+				std::pow(l.color.g / 255.0f, 2.2f),
+				std::pow(l.color.b / 255.0f, 2.2f)
+			};
+
 			Vector3 lvec = Vector3Subtract(lt->position, p.hit_point);
 			float   ldist = Vector3Length(lvec);
 			Vector3 ldir = { lvec.x / ldist, lvec.y / ldist, lvec.z / ldist };
@@ -244,7 +285,14 @@ namespace me::systems {
 			if (!lt) continue;
 
 			auto& dl = dir_pool.components[i];
-			Vector3 lcolor = { dl.color.r / 255.0f, dl.color.g / 255.0f, dl.color.b / 255.0f };
+
+			//Vector3 lcolor = { dl.color.r / 255.0f, dl.color.g / 255.0f, dl.color.b / 255.0f };
+			Vector3 lcolor = {
+				std::pow(dl.color.r / 255.0f, 2.2f),
+				std::pow(dl.color.g / 255.0f, 2.2f),
+				std::pow(dl.color.b / 255.0f, 2.2f)
+			};
+
 			float   pitch = lt->rotation.x * DEG2RAD;
 			float   yaw = lt->rotation.y * DEG2RAD;
 			Vector3 fwd = Vector3Normalize({
@@ -284,34 +332,86 @@ namespace me::systems {
 		};
 
 		// ==========================================
-		// 5. BOUNCE (GI + reflections)
+		// 5. BOUNCE (GI + Reflections + Refractions)
 		// ==========================================
-		Vector3 reflect_dir = Vector3Normalize(Vector3Reflect(ray.direction, p.normal));
-		Vector3 diffuse_dir = Vector3Normalize(Vector3Add(p.normal, random_unit_vector()));
-		Vector3 bounce_dir = Vector3Normalize(Vector3Lerp(reflect_dir, diffuse_dir, p.roughness));
+		Vector3 bounce_dir;
+		Vector3 bounce_origin;
 
-		if (Vector3DotProduct(bounce_dir, p.normal) < 0.0f)
-			bounce_dir = diffuse_dir;
+		if (p.transmission > 0.0f) {
+			// --- GLASS / REFRACTION PATH ---
 
-		Vector3 bounce_color = trace_ray({ shadow_origin, bounce_dir }, depth + 1);
+			// If we hit the outside, ratio is Air/IOR. If inside, ratio is IOR/Air.
+			float refraction_ratio = p.front_face ? (1.0f / p.ior) : p.ior;
 
-		float   sw = 1.0f - p.roughness;           // specular weight
-		float   dw = p.roughness;                  // diffuse weight
-		float   bw = sw + dw * 0.5f;               // total bounce weight [0.5, 1.0]
-		Vector3 bounce = {
-			bounce_color.x * p.base_color.x * bw,
-			bounce_color.y * p.base_color.y * bw,
-			bounce_color.z * p.base_color.z * bw
-		};
+			Vector3 unit_dir = Vector3Normalize(ray.direction);
+			float cos_theta = std::min(Vector3DotProduct(Vector3Scale(unit_dir, -1.0f), p.normal), 1.0f);
+			float sin_theta = std::sqrt(1.0f - cos_theta * cos_theta);
+
+			// Check for Total Internal Reflection (TIR)
+			bool cannot_refract = refraction_ratio * sin_theta > 1.0f;
+
+			if (cannot_refract || reflectance(cos_theta, refraction_ratio) > random_float(seed)) {
+				// Mirror reflection (Fresnel or TIR)
+				bounce_dir = Vector3Normalize(Vector3Reflect(unit_dir, p.normal));
+			} else {
+				// Pass completely through the glass!
+				bounce_dir = Vector3Normalize(refract(unit_dir, p.normal, refraction_ratio));
+			}
+
+			// Add frosted glass effect if roughness > 0
+			if (p.roughness > 0.0f) {
+				bounce_dir = Vector3Normalize(Vector3Add(bounce_dir, Vector3Scale(random_unit_vector(seed), p.roughness)));
+			}
+
+			// Push origin slightly to avoid self-intersection acne.
+			// If we are entering the glass, push INTO it. If reflecting, push OUT of it.
+			if (Vector3DotProduct(bounce_dir, p.normal) < 0.0f) {
+				bounce_origin = Vector3Subtract(p.hit_point, Vector3Scale(p.normal, 0.001f));
+			} else {
+				bounce_origin = Vector3Add(p.hit_point, Vector3Scale(p.normal, 0.001f));
+			}
+
+		} else {
+			// --- OPAQUE / SOLID PATH ---
+			Vector3 reflect_dir = Vector3Normalize(Vector3Reflect(ray.direction, p.normal));
+			Vector3 diffuse_dir = Vector3Normalize(Vector3Add(p.normal, random_unit_vector(seed)));
+			bounce_dir = Vector3Normalize(Vector3Lerp(reflect_dir, diffuse_dir, p.roughness));
+
+			if (Vector3DotProduct(bounce_dir, p.normal) < 0.0f) bounce_dir = diffuse_dir;
+
+			bounce_origin = Vector3Add(p.hit_point, Vector3Scale(p.normal, 0.001f));
+		}
+
+		Vector3 bounce_color = trace_ray({ bounce_origin, bounce_dir }, depth + 1, seed);
+
+		// For glass, we don't multiply by a bounce weight (bw). Light passes right through.
+		float sw = 1.0f - p.roughness;
+		float dw = p.roughness;
+		float bw = sw + dw * 0.5f;
+
+		Vector3 bounce = { 0,0,0 };
+		if (p.transmission > 0.0f) {
+			// Glass tints the light based on its color as light passes through
+			bounce = { bounce_color.x * p.base_color.x, bounce_color.y * p.base_color.y, bounce_color.z * p.base_color.z };
+		} else {
+			// Solid objects bounce light normally
+			bounce = { bounce_color.x * p.base_color.x * bw, bounce_color.y * p.base_color.y * bw, bounce_color.z * p.base_color.z * bw };
+		}
 
 		// ==========================================
 		// 6. COMBINE
 		// radiance = albedo*(direct+ambient) + bounce
 		// ==========================================
+		//return Vector3{
+		//	std::clamp(p.base_color.x * (direct.x + ambient.x) + bounce.x, 0.0f, 1.0f),
+		//	std::clamp(p.base_color.y * (direct.y + ambient.y) + bounce.y, 0.0f, 1.0f),
+		//	std::clamp(p.base_color.z * (direct.z + ambient.z) + bounce.z, 0.0f, 1.0f)
+		//};
+
 		return Vector3{
-			std::clamp(p.base_color.x * (direct.x + ambient.x) + bounce.x, 0.0f, 1.0f),
-			std::clamp(p.base_color.y * (direct.y + ambient.y) + bounce.y, 0.0f, 1.0f),
-			std::clamp(p.base_color.z * (direct.z + ambient.z) + bounce.z, 0.0f, 1.0f)
+			p.base_color.x * (direct.x + ambient.x) + bounce.x,
+			p.base_color.y * (direct.y + ambient.y) + bounce.y,
+			p.base_color.z * (direct.z + ambient.z) + bounce.z
 		};
 	}
 

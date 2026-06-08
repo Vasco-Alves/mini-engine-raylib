@@ -224,6 +224,8 @@ namespace me::render {
 			rlPopMatrix();
 		}
 
+		rlDrawRenderBatchActive();
+
 		// --- DRAW 3D MODELS ---
 		auto& modelPool = reg.view<me::components::Model3DComponent>();
 		Shader active_shader = s_LightingEnabled ? s_LightingShader : s_DefaultShader;

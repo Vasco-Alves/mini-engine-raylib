@@ -21,7 +21,7 @@ namespace me::systems {
 		void on_stop();
 
 		Texture2D* get_texture() { return &m_OutputTexture; }
-		void        export_to_png(const std::string& filepath);
+		void       export_to_png(const std::string& filepath);
 
 		// Pass the registry so the BVH can be rebuilt whenever the scene changes.
 		// Passing nullptr just resets the frame counter without a rebuild
@@ -46,15 +46,17 @@ namespace me::systems {
 		int export_height = 1080;
 		int export_samples = 50;
 
+		uint32_t m_TotalFramesRendered = 0;
+
 	private:
 		// trace_ray no longer takes Registry& — it reads m_ActiveRegistry,
 		// which is set for the lifetime of a single on_update call.
-		Vector3 trace_ray(const me::raytracing::Ray& ray, int depth);
+		Vector3 trace_ray(const me::raytracing::Ray& ray, int depth, uint32_t& seed);
 
 		me::raytracing::Ray generate_camera_ray(
 			int x, int y, int width, int height,
 			const me::components::CameraComponent& camera,
-			const me::components::TransformComponent& cam_transform);
+			const me::components::TransformComponent& cam_transform, uint32_t frame_count);
 
 	private:
 		int m_Width = 0;

@@ -111,21 +111,73 @@ namespace me::raytracing {
 		return FLT_MAX;
 	}
 
-	float random_float() {
-		static thread_local std::mt19937 generator(std::random_device{}());
-		std::uniform_real_distribution<float> distribution(0.0f, 1.0f);
-		return distribution(generator);
+	bool intersect_triangle(const Vector3& ray_origin, const Vector3& ray_dir,
+		const Vector3& v0, const Vector3& v1, const Vector3& v2,
+		float& out_t, float& out_u, float& out_v) {
+		//const float EPSILON = 1e-8f;
+
+		// 1. Find vectors for two edges sharing V0
+		Vector3 edge1 = Vector3Subtract(v1, v0);
+		Vector3 edge2 = Vector3Subtract(v2, v0);
+
+		// 2. Begin calculating determinant - also used to calculate U parameter
+		Vector3 h = Vector3CrossProduct(ray_dir, edge2);
+		float a = Vector3DotProduct(edge1, h);
+
+		// If determinant is near zero, ray lies in plane of triangle (or is parallel to it)
+		if (a > -EPSILON && a < EPSILON) {
+			return false;
+		}
+
+		float f = 1.0f / a;
+
+		// 3. Calculate distance from V0 to ray origin
+		Vector3 s = Vector3Subtract(ray_origin, v0);
+
+		// 4. Calculate U parameter and test bounds (Is it outside the triangle?)
+		float u = f * Vector3DotProduct(s, h);
+		if (u < 0.0f || u > 1.0f) {
+			return false;
+		}
+
+		// 5. Prepare to test V parameter
+		Vector3 q = Vector3CrossProduct(s, edge1);
+
+		// 6. Calculate V parameter and test bounds
+		float v = f * Vector3DotProduct(ray_dir, q);
+		if (v < 0.0f || u + v > 1.0f) { // Notice the u + v > 1.0f! (Barycentric limit)
+			return false;
+		}
+
+		// 7. Ray intersects triangle! Calculate T (distance)
+		float t = f * Vector3DotProduct(edge2, q);
+
+		// Make sure it's in front of the camera, not behind it
+		if (t > EPSILON) {
+			out_t = t;
+			out_u = u;
+			out_v = v;
+			return true;
+		}
+
+		return false; // Line intersects, but it's behind the ray origin
 	}
 
-	Vector3 random_unit_vector() {
-		while (true) {
-			Vector3 p = { random_float() * 2.0f - 1.0f, random_float() * 2.0f - 1.0f, random_float() * 2.0f - 1.0f };
-			float len_sq = Vector3DotProduct(p, p);
-			if (len_sq > 0.001f && len_sq <= 1.0f) {
-				float inv_len = 1.0f / std::sqrt(len_sq);
-				return Vector3{ p.x * inv_len, p.y * inv_len, p.z * inv_len };
-			}
-		}
+	Vector3 refract(const Vector3& uv, const Vector3& n, float etai_over_etat) {
+		float cos_theta = std::min(Vector3DotProduct(Vector3Scale(uv, -1.0f), n), 1.0f);
+		Vector3 r_out_perp = Vector3Scale(Vector3Add(uv, Vector3Scale(n, cos_theta)), etai_over_etat);
+
+		float r_out_parallel_mag = -std::sqrt(std::abs(1.0f - Vector3DotProduct(r_out_perp, r_out_perp)));
+		Vector3 r_out_parallel = Vector3Scale(n, r_out_parallel_mag);
+
+		return Vector3Add(r_out_perp, r_out_parallel);
+	}
+
+	float reflectance(float cosine, float ref_idx) {
+		// Schlick's approximation for Fresnel reflectance
+		float r0 = (1.0f - ref_idx) / (1.0f + ref_idx);
+		r0 = r0 * r0;
+		return r0 + (1.0f - r0) * std::pow((1.0f - cosine), 5.0f);
 	}
 
 	Vector3 sample_sky(const Vector3& dir) {

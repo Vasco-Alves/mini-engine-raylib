@@ -4,13 +4,30 @@ All notable changes to this project will be documented in this file.
 
 # Untitled
 
+## [0.11.1] - 2026-06-08
+
+### Added:
+
+- **Glass & Refraction**: Introduced `transmission` and `ior` (Index of Refraction) to `MaterialComponent`, allowing for realistic rendering of transparent materials like glass, water, and diamonds.
+- **Physical Light Support**: Upgraded Point and Directional light intensity calculations to work in Linear Space (sRGB-to-Linear conversion), resulting in more vibrant and physically accurate lighting.
+- **ACES Filmic Tonemapping**: Implemented ACES curve for HDR-to-LDR mapping, fixing blown-out highlights and color desaturation ("washed-out" look).
+- **QMC Anti-Aliasing**: Integrated Halton sequence for camera ray jittering, significantly improving edge quality and pixel distribution.
+- **Fast RNG**: Replaced standard library random with a high-performance PCG hash for bounce rays, significantly reducing noise and improving performance.
+
+### Changed:
+
+- **BLAS Acceleration**: Upgraded `TriangleBVH` from a brute-force list to a structured BVH tree, enabling real-time raytracing for high-poly 3D models.
+- **Raytracer Pipeline**: Refactored the raytracing pipeline to use physically-based material properties (Linear space conversion) and refined the integration logic to prevent double-gamma errors.
+- **Renderer Stability**: Fixed a bug where primitive shapes in the OpenGL editor would inherit material uniforms from subsequently drawn 3D models.
+
 ## [0.11.0] - 2026-05-08
 
-Added raytracing!
+### Added:
 
-When editing the scene, now the user can click the button "RENDER" to enter raytracing mode and see the scene. It is posible to change configuration and to export to a PNG.
-
-The raytracing system will check first if an object has a `MaterialComponent`. Currently only supports the use of primitive engine shapes: `Sphere`, `Plane` and `Cube`.
+- **Raytracing System**: Initial implementation of the CPU-based path tracer.
+- **Render Mode**: Introduced a "RENDER" button to toggle between the rasterized editor view and the path-traced viewport.
+- **BVH System**: Built a Two-Level Acceleration Structure (TLAS/BLAS) to support real-time raytracing of primitives (`Sphere`, `Plane`, `Cube`) and custom 3D models (`Model3DComponent`).
+- **Export**: Added functionality to export the accumulated raytraced result to a high-quality PNG file.
 
 ## [0.10.0] - 2026-05-24
 
