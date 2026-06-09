@@ -18,6 +18,18 @@
 
 using json = nlohmann::ordered_json;
 
+namespace {
+	// Reads a color stored as flat color_r/g/b[/a] keys (the scene file format).
+	me::Color read_color(const json& j, bool with_alpha = false) {
+		return me::Color{
+			static_cast<unsigned char>(j.value("color_r", 255)),
+			static_cast<unsigned char>(j.value("color_g", 255)),
+			static_cast<unsigned char>(j.value("color_b", 255)),
+			with_alpha ? static_cast<unsigned char>(j.value("color_a", 255)) : static_cast<unsigned char>(255)
+		};
+	}
+}
+
 namespace me {
 	namespace scene_manager {
 
@@ -326,12 +338,7 @@ namespace me {
 					auto& j = comps["MeshRenderer"];
 					me::components::Shape3DComponent sc;
 					sc.type = static_cast<me::components::Shape3DComponent::Type>(j.value("type", 0));
-					sc.color = me::Color{
-						static_cast<unsigned char>(j.value("color_r", 255)),
-						static_cast<unsigned char>(j.value("color_g", 255)),
-						static_cast<unsigned char>(j.value("color_b", 255)),
-						255
-					};
+					sc.color = read_color(j);
 					sc.wireframe = j.value("wireframe", false);
 					e.add_component(sc);
 				}
@@ -345,12 +352,7 @@ namespace me {
 						mc.model = me::assets::load_model(path.c_str());
 					}
 
-					mc.tint = me::Color{
-						static_cast<unsigned char>(j.value("color_r", 255)),
-						static_cast<unsigned char>(j.value("color_g", 255)),
-						static_cast<unsigned char>(j.value("color_b", 255)),
-						255
-					};
+					mc.tint = read_color(j);
 					e.add_component(mc);
 				}
 
@@ -358,12 +360,7 @@ namespace me {
 				if (comps.contains("Material")) {
 					auto& j = comps["Material"];
 					me::components::MaterialComponent mat;
-					mat.albedo = me::Color{
-						static_cast<unsigned char>(j.value("color_r", 255)),
-						static_cast<unsigned char>(j.value("color_g", 255)),
-						static_cast<unsigned char>(j.value("color_b", 255)),
-						static_cast<unsigned char>(j.value("color_a", 255))
-					};
+					mat.albedo = read_color(j, true);
 					mat.roughness = j.value("roughness", 1.0f);
 					mat.metallic = j.value("metallic", 0.0f);
 					mat.emission_power = j.value("emission_power", 0.0f);
@@ -387,12 +384,7 @@ namespace me {
 				if (comps.contains("Light")) {
 					auto& j = comps["Light"];
 					me::components::LightComponent lc;
-					lc.color = me::Color{
-						static_cast<unsigned char>(j.value("color_r", 255)),
-						static_cast<unsigned char>(j.value("color_g", 255)),
-						static_cast<unsigned char>(j.value("color_b", 255)),
-						255
-					};
+					lc.color = read_color(j);
 					lc.intensity = j.value("intensity", 1.0f);
 					e.add_component(lc);
 				}
@@ -400,12 +392,7 @@ namespace me {
 				if (comps.contains("DirectionalLight")) {
 					auto& j = comps["DirectionalLight"];
 					me::components::DirectionalLightComponent dlc;
-					dlc.color = me::Color{
-						static_cast<unsigned char>(j.value("color_r", 255)),
-						static_cast<unsigned char>(j.value("color_g", 255)),
-						static_cast<unsigned char>(j.value("color_b", 255)),
-						255
-					};
+					dlc.color = read_color(j);
 					dlc.intensity = j.value("intensity", 1.0f);
 					e.add_component(dlc);
 				}
@@ -435,12 +422,7 @@ namespace me {
 					auto& j = comps["Shape2D"];
 					me::components::Shape2DComponent s2d;
 					s2d.type = static_cast<me::components::Shape2DComponent::Type>(j.value("type", 0));
-					s2d.color = me::Color{
-						static_cast<unsigned char>(j.value("color_r", 255)),
-						static_cast<unsigned char>(j.value("color_g", 255)),
-						static_cast<unsigned char>(j.value("color_b", 255)),
-						255
-					};
+					s2d.color = read_color(j);
 					s2d.wireframe = j.value("wireframe", false);
 					e.add_component(s2d);
 				}

@@ -7,13 +7,82 @@
 #include <mini-engine-raylib/assets/assets.hpp>
 #include <mini-engine-raylib/audio/audio.hpp>
 #include <mini-engine-raylib/core/logger.hpp>
+#include <mini-engine-raylib/render/color.hpp>
 #include <imgui.h>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <filesystem>
 
 namespace editor {
 
-	static const ImGuiTreeNodeFlags s_TreeNodeFlags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanAvailWidth;
+	namespace {
+
+		const ImGuiTreeNodeFlags s_TreeNodeFlags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_AllowOverlap | ImGuiTreeNodeFlags_SpanAvailWidth;
+
+		// --- Color conversion between me::Color (0-255) and ImGui's float[4] (0-1) ---
+		inline void color_to_floats(const me::Color& c, float out[4]) {
+			out[0] = c.r / 255.0f;
+			out[1] = c.g / 255.0f;
+			out[2] = c.b / 255.0f;
+			out[3] = c.a / 255.0f;
+		}
+
+		inline me::Color color_from_floats(const float in[4]) {
+			return me::Color{
+				static_cast<std::uint8_t>(in[0] * 255.0f),
+				static_cast<std::uint8_t>(in[1] * 255.0f),
+				static_cast<std::uint8_t>(in[2] * 255.0f),
+				static_cast<std::uint8_t>(in[3] * 255.0f)
+			};
+		}
+
+		// RAII collapsible component header with a red [X] remove button.
+		// The destructor always balances the ImGui tree/ID stack, so removing a
+		// component while its node is open can't leave an unmatched TreePush.
+		class ComponentSection {
+		public:
+			ComponentSection(const char* id, const char* label) {
+				ImGui::PushID(id);
+				m_Opened = ImGui::TreeNodeEx(label, s_TreeNodeFlags);
+
+				float button_size = ImGui::GetFrameHeight();
+				ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - button_size);
+				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+				m_Remove = ImGui::Button("X", ImVec2(button_size, button_size));
+				ImGui::PopStyleColor();
+			}
+
+			~ComponentSection() {
+				if (m_Opened) ImGui::TreePop();
+				ImGui::PopID();
+			}
+
+			ComponentSection(const ComponentSection&) = delete;
+			ComponentSection& operator=(const ComponentSection&) = delete;
+
+			bool remove_clicked() const { return m_Remove; }
+			// True when the node's body should be drawn (open and not being removed).
+			bool body_visible() const { return m_Opened && !m_Remove; }
+
+		private:
+			bool m_Opened = false;
+			bool m_Remove = false;
+		};
+
+		// Records an Undo command when an edit on the preceding widget completes.
+		// Call immediately after the widget. One shared snapshot per component type
+		// is sufficient: only a single widget can be active at any moment.
+		template <typename T>
+		void track_edit(me::Entity entity, T* comp, editor::CommandHistory& history) {
+			static T s_start{};
+			if (ImGui::IsItemActivated()) s_start = *comp;
+			if (ImGui::IsItemDeactivatedAfterEdit()) {
+				history.AddCommand(std::make_unique<editor::ModifyComponentCommand<T>>(entity, s_start, *comp));
+			}
+		}
+
+	} // namespace
 
 	void InspectorPanel::on_imgui_render(me::Entity selected_entity, editor::CommandHistory& command_history) {
 		ImGui::Begin("Inspector");
@@ -43,642 +112,336 @@ namespace editor {
 	}
 
 	void InspectorPanel::draw_tag(me::Entity entity, editor::CommandHistory& command_history) {
-		if (auto* tag = entity.try_get_component<me::components::TagComponent>()) {
-			char buffer[256];
-			memset(buffer, 0, sizeof(buffer));
-			strncpy(buffer, tag->name.c_str(), sizeof(buffer) - 1);
+		auto* tag = entity.try_get_component<me::components::TagComponent>();
+		if (!tag) return;
 
-			ImGui::Text("Name");
-			ImGui::SameLine();
-			ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
+		char buffer[256];
+		memset(buffer, 0, sizeof(buffer));
+		strncpy(buffer, tag->name.c_str(), sizeof(buffer) - 1);
 
-			static me::components::TagComponent start_state;
-			bool finished_editing = false;
+		ImGui::Text("Name");
+		ImGui::SameLine();
+		ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
 
-			if (ImGui::InputText("##Tag", buffer, sizeof(buffer))) {
-				tag->name = std::string(buffer);
-			}
-
-			if (ImGui::IsItemActivated()) start_state = *tag;
-			if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-			if (finished_editing) {
-				auto cmd = std::make_unique<editor::ModifyComponentCommand<me::components::TagComponent>>(
-					entity, start_state, *tag
-				);
-				command_history.AddCommand(std::move(cmd));
-			}
-
-			ImGui::PopItemWidth();
-			ImGui::Dummy(ImVec2(0, 10));
+		if (ImGui::InputText("##Tag", buffer, sizeof(buffer))) {
+			tag->name = std::string(buffer);
 		}
+		track_edit(entity, tag, command_history);
+
+		ImGui::PopItemWidth();
+		ImGui::Dummy(ImVec2(0, 10));
 	}
 
 	void InspectorPanel::draw_transform(me::Entity entity, editor::CommandHistory& command_history) {
-		if (auto* transform = entity.try_get_component<me::components::TransformComponent>()) {
-			if (ImGui::TreeNodeEx("Transform", s_TreeNodeFlags)) {
-				static me::components::TransformComponent start_state;
-				bool finished_editing = false;
+		auto* transform = entity.try_get_component<me::components::TransformComponent>();
+		if (!transform) return;
 
-				// --- Position ---
-				ImGui::DragFloat3("Position", &transform->position.x, 0.1f);
-				if (ImGui::IsItemActivated()) start_state = *transform;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
+		// Transform has no remove button, so it keeps its own (always-balanced) tree node.
+		if (ImGui::TreeNodeEx("Transform", s_TreeNodeFlags)) {
+			ImGui::DragFloat3("Position", &transform->position.x, 0.1f);
+			track_edit(entity, transform, command_history);
 
-				// --- Rotation ---
-				ImGui::DragFloat3("Rotation", &transform->rotation.x, 1.0f);
-				if (ImGui::IsItemActivated()) start_state = *transform;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
+			ImGui::DragFloat3("Rotation", &transform->rotation.x, 1.0f);
+			track_edit(entity, transform, command_history);
 
-				// --- Scale ---
-				ImGui::DragFloat3("Scale", &transform->scale.x, 0.1f);
-				if (ImGui::IsItemActivated()) start_state = *transform;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
+			ImGui::DragFloat3("Scale", &transform->scale.x, 0.1f);
+			track_edit(entity, transform, command_history);
 
-				if (finished_editing) {
-					auto cmd = std::make_unique<editor::ModifyComponentCommand<me::components::TransformComponent>>(
-						entity, start_state, *transform
-					);
-					command_history.AddCommand(std::move(cmd));
-				}
-
-				ImGui::TreePop();
-			}
+			ImGui::TreePop();
 		}
 	}
 
 	void InspectorPanel::draw_shape3d(me::Entity entity, editor::CommandHistory& command_history) {
-		if (auto* shape = entity.try_get_component<me::components::Shape3DComponent>()) {
-			ImGui::PushID("Shape3D");
+		auto* shape = entity.try_get_component<me::components::Shape3DComponent>();
+		if (!shape) return;
 
-			float button_size = ImGui::GetFrameHeight();
-			bool opened = ImGui::TreeNodeEx("Shape 3D", s_TreeNodeFlags);
+		ComponentSection section("Shape3D", "Shape 3D");
+		if (section.remove_clicked()) { entity.remove_component<me::components::Shape3DComponent>(); return; }
+		if (!section.body_visible()) return;
 
-			ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - button_size);
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-			bool remove_component = ImGui::Button("X", ImVec2(button_size, button_size));
-			ImGui::PopStyleColor();
-
-			if (remove_component) entity.remove_component<me::components::Shape3DComponent>();
-
-			if (opened && !remove_component) {
-				static me::components::Shape3DComponent start_state;
-				bool finished_editing = false;
-
-				const char* types[] = { "Cube", "Sphere", "Plane" };
-				int current_type = static_cast<int>(shape->type);
-				if (ImGui::Combo("Primitive", &current_type, types, 3)) {
-					shape->type = static_cast<me::components::Shape3DComponent::Type>(current_type);
-				}
-				if (ImGui::IsItemActivated()) start_state = *shape;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				float color[4] = { shape->color.r / 255.0f, shape->color.g / 255.0f, shape->color.b / 255.0f, shape->color.a / 255.0f };
-				if (ImGui::ColorEdit4("Color", color)) {
-					shape->color.r = static_cast<uint8_t>(color[0] * 255.0f);
-					shape->color.g = static_cast<uint8_t>(color[1] * 255.0f);
-					shape->color.b = static_cast<uint8_t>(color[2] * 255.0f);
-					shape->color.a = static_cast<uint8_t>(color[3] * 255.0f);
-				}
-				if (ImGui::IsItemActivated()) start_state = *shape;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				ImGui::Checkbox("Wireframe", &shape->wireframe);
-				if (ImGui::IsItemActivated()) start_state = *shape;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				if (finished_editing) {
-					auto cmd = std::make_unique<editor::ModifyComponentCommand<me::components::Shape3DComponent>>(
-						entity, start_state, *shape
-					);
-					command_history.AddCommand(std::move(cmd));
-				}
-
-				ImGui::TreePop();
-			}
-			ImGui::PopID();
+		const char* types[] = { "Cube", "Sphere", "Plane" };
+		int current_type = static_cast<int>(shape->type);
+		if (ImGui::Combo("Primitive", &current_type, types, 3)) {
+			shape->type = static_cast<me::components::Shape3DComponent::Type>(current_type);
 		}
+		track_edit(entity, shape, command_history);
+
+		float color[4];
+		color_to_floats(shape->color, color);
+		if (ImGui::ColorEdit4("Color", color)) shape->color = color_from_floats(color);
+		track_edit(entity, shape, command_history);
+
+		ImGui::Checkbox("Wireframe", &shape->wireframe);
+		track_edit(entity, shape, command_history);
 	}
 
-	// ==========================================
-	// NEW MATERIAL PANEL IMPLEMENTATION
-	// ==========================================
 	void InspectorPanel::draw_material(me::Entity entity, editor::CommandHistory& command_history) {
-		if (auto* mat = entity.try_get_component<me::components::MaterialComponent>()) {
-			ImGui::PushID("Material");
+		auto* mat = entity.try_get_component<me::components::MaterialComponent>();
+		if (!mat) return;
 
-			float button_size = ImGui::GetFrameHeight();
-			bool opened = ImGui::TreeNodeEx("Material", s_TreeNodeFlags);
+		ComponentSection section("Material", "Material");
+		if (section.remove_clicked()) { entity.remove_component<me::components::MaterialComponent>(); return; }
+		if (!section.body_visible()) return;
 
-			ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - button_size);
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-			bool remove_component = ImGui::Button("X", ImVec2(button_size, button_size));
-			ImGui::PopStyleColor();
+		float color[4];
+		color_to_floats(mat->albedo, color);
+		if (ImGui::ColorEdit4("Albedo", color)) mat->albedo = color_from_floats(color);
+		track_edit(entity, mat, command_history);
 
-			if (remove_component) entity.remove_component<me::components::MaterialComponent>();
+		ImGui::SliderFloat("Roughness", &mat->roughness, 0.0f, 1.0f);
+		track_edit(entity, mat, command_history);
 
-			if (opened && !remove_component) {
-				static me::components::MaterialComponent start_state;
-				bool finished_editing = false;
+		ImGui::SliderFloat("Metallic", &mat->metallic, 0.0f, 1.0f);
+		track_edit(entity, mat, command_history);
 
-				// Albedo Color
-				float color[4] = { mat->albedo.r / 255.0f, mat->albedo.g / 255.0f, mat->albedo.b / 255.0f, mat->albedo.a / 255.0f };
-				if (ImGui::ColorEdit4("Albedo", color)) {
-					mat->albedo.r = static_cast<uint8_t>(color[0] * 255.0f);
-					mat->albedo.g = static_cast<uint8_t>(color[1] * 255.0f);
-					mat->albedo.b = static_cast<uint8_t>(color[2] * 255.0f);
-					mat->albedo.a = static_cast<uint8_t>(color[3] * 255.0f);
-				}
-				if (ImGui::IsItemActivated()) start_state = *mat;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
+		ImGui::DragFloat("Emission Power", &mat->emission_power, 0.1f, 0.0f, 100.0f);
+		track_edit(entity, mat, command_history);
 
-				// Roughness
-				ImGui::SliderFloat("Roughness", &mat->roughness, 0.0f, 1.0f);
-				if (ImGui::IsItemActivated()) start_state = *mat;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
+		ImGui::SliderFloat("Transmission (Glass)", &mat->transmission, 0.0f, 1.0f);
+		track_edit(entity, mat, command_history);
 
-				// Metallic
-				ImGui::SliderFloat("Metallic", &mat->metallic, 0.0f, 1.0f);
-				if (ImGui::IsItemActivated()) start_state = *mat;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				// Emission
-				ImGui::DragFloat("Emission Power", &mat->emission_power, 0.1f, 0.0f, 100.0f);
-				if (ImGui::IsItemActivated()) start_state = *mat;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				// Transmission (Slider 0 to 1)
-				ImGui::SliderFloat("Transmission (Glass)", &mat->transmission, 0.0f, 1.0f);
-				if (ImGui::IsItemActivated()) start_state = *mat;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				// Index of Refraction (Drag 1.0 to 3.0)
-				ImGui::DragFloat("IOR", &mat->ior, 0.01f, 1.0f, 3.0f, "%.2f");
-				if (ImGui::IsItemActivated()) start_state = *mat;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				if (finished_editing) {
-					auto cmd = std::make_unique<editor::ModifyComponentCommand<me::components::MaterialComponent>>(
-						entity, start_state, *mat
-					);
-					command_history.AddCommand(std::move(cmd));
-				}
-
-				ImGui::TreePop();
-			}
-			ImGui::PopID();
-		}
+		ImGui::DragFloat("IOR", &mat->ior, 0.01f, 1.0f, 3.0f, "%.2f");
+		track_edit(entity, mat, command_history);
 	}
 
 	void InspectorPanel::draw_model3d(me::Entity entity, editor::CommandHistory& command_history) {
-		if (auto* modelComp = entity.try_get_component<me::components::Model3DComponent>()) {
-			ImGui::PushID("Model3D");
+		auto* modelComp = entity.try_get_component<me::components::Model3DComponent>();
+		if (!modelComp) return;
 
-			float button_size = ImGui::GetFrameHeight();
-			bool opened = ImGui::TreeNodeEx("Model 3D", s_TreeNodeFlags);
+		ComponentSection section("Model3D", "Model 3D");
+		if (section.remove_clicked()) {
+			if (modelComp->model.handle != 0) me::assets::release(modelComp->model);
+			entity.remove_component<me::components::Model3DComponent>();
+			return;
+		}
+		if (!section.body_visible()) return;
 
-			ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - button_size);
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-			bool remove_component = ImGui::Button("X", ImVec2(button_size, button_size));
-			ImGui::PopStyleColor();
+		ImGui::Text("Mesh");
+		ImGui::SameLine();
+		ImGui::Button("Drag .obj / .glb Here", ImVec2(ImGui::GetContentRegionAvail().x, 0));
 
-			if (remove_component) {
-				if (modelComp->model.handle != 0) me::assets::release(modelComp->model);
-				entity.remove_component<me::components::Model3DComponent>();
-			}
-
-			if (opened && !remove_component) {
-				ImGui::Text("Mesh");
-				ImGui::SameLine();
-				ImGui::Button("Drag .obj / .glb Here", ImVec2(ImGui::GetContentRegionAvail().x, 0));
-
-				if (ImGui::BeginDragDropTarget()) {
-					if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("CONTENT_BROWSER_ITEM")) {
-						const char* dropped_path = (const char*)payload->Data;
-						std::filesystem::path fp = dropped_path;
-						if (fp.extension() == ".glb" || fp.extension() == ".obj") {
-							if (modelComp->model.handle != 0) me::assets::release(modelComp->model);
-							modelComp->model = me::assets::load_model(dropped_path);
-							me::logger::info(std::string("Successfully swapped model to: ") + dropped_path);
-						} else {
-							me::logger::warn("You can only drop .obj or .glb files onto a Model3DComponent.");
-						}
-					}
-					ImGui::EndDragDropTarget();
+		if (ImGui::BeginDragDropTarget()) {
+			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("CONTENT_BROWSER_ITEM")) {
+				const char* dropped_path = (const char*)payload->Data;
+				std::filesystem::path fp = dropped_path;
+				if (fp.extension() == ".glb" || fp.extension() == ".obj") {
+					if (modelComp->model.handle != 0) me::assets::release(modelComp->model);
+					modelComp->model = me::assets::load_model(dropped_path);
+					me::logger::info(std::string("Successfully swapped model to: ") + dropped_path);
+				} else {
+					me::logger::warn("You can only drop .obj or .glb files onto a Model3DComponent.");
 				}
-				ImGui::TreePop();
 			}
-			ImGui::PopID();
+			ImGui::EndDragDropTarget();
 		}
 	}
 
 	void InspectorPanel::draw_light(me::Entity entity, editor::CommandHistory& command_history) {
-		if (auto* light = entity.try_get_component<me::components::LightComponent>()) {
-			ImGui::PushID("Light");
+		auto* light = entity.try_get_component<me::components::LightComponent>();
+		if (!light) return;
 
-			float button_size = ImGui::GetFrameHeight();
-			bool opened = ImGui::TreeNodeEx("Light", s_TreeNodeFlags);
+		ComponentSection section("Light", "Light");
+		if (section.remove_clicked()) { entity.remove_component<me::components::LightComponent>(); return; }
+		if (!section.body_visible()) return;
 
-			ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - button_size);
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-			bool remove_component = ImGui::Button("X", ImVec2(button_size, button_size));
-			ImGui::PopStyleColor();
+		float color[4];
+		color_to_floats(light->color, color);
+		if (ImGui::ColorEdit3("Color", color)) light->color = color_from_floats(color);
+		track_edit(entity, light, command_history);
 
-			if (remove_component) entity.remove_component<me::components::LightComponent>();
-
-			if (opened && !remove_component) {
-				static me::components::LightComponent start_state;
-				bool finished_editing = false;
-
-				float color[3] = { light->color.r / 255.0f, light->color.g / 255.0f, light->color.b / 255.0f };
-				if (ImGui::ColorEdit3("Color", color)) {
-					light->color.r = static_cast<uint8_t>(color[0] * 255.0f);
-					light->color.g = static_cast<uint8_t>(color[1] * 255.0f);
-					light->color.b = static_cast<uint8_t>(color[2] * 255.0f);
-				}
-				if (ImGui::IsItemActivated()) start_state = *light;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				ImGui::DragFloat("Intensity", &light->intensity, 0.1f, 0.0f, 100.0f);
-				if (ImGui::IsItemActivated()) start_state = *light;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				if (finished_editing) {
-					auto cmd = std::make_unique<editor::ModifyComponentCommand<me::components::LightComponent>>(
-						entity, start_state, *light
-					);
-					command_history.AddCommand(std::move(cmd));
-				}
-
-				ImGui::TreePop();
-			}
-			ImGui::PopID();
-		}
+		ImGui::DragFloat("Intensity", &light->intensity, 0.1f, 0.0f, 100.0f);
+		track_edit(entity, light, command_history);
 	}
 
 	void InspectorPanel::draw_directional_light(me::Entity entity, editor::CommandHistory& command_history) {
-		if (auto* light = entity.try_get_component<me::components::DirectionalLightComponent>()) {
-			ImGui::PushID("DirLight");
+		auto* light = entity.try_get_component<me::components::DirectionalLightComponent>();
+		if (!light) return;
 
-			float button_size = ImGui::GetFrameHeight();
-			bool opened = ImGui::TreeNodeEx("Directional Light", s_TreeNodeFlags);
+		ComponentSection section("DirLight", "Directional Light");
+		if (section.remove_clicked()) { entity.remove_component<me::components::DirectionalLightComponent>(); return; }
+		if (!section.body_visible()) return;
 
-			ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - button_size);
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-			bool remove_component = ImGui::Button("X", ImVec2(button_size, button_size));
-			ImGui::PopStyleColor();
+		float color[4];
+		color_to_floats(light->color, color);
+		if (ImGui::ColorEdit3("Color", color)) light->color = color_from_floats(color);
+		track_edit(entity, light, command_history);
 
-			if (remove_component) entity.remove_component<me::components::DirectionalLightComponent>();
-
-			if (opened && !remove_component) {
-				static me::components::DirectionalLightComponent start_state;
-				bool finished_editing = false;
-
-				float color[3] = { light->color.r / 255.0f, light->color.g / 255.0f, light->color.b / 255.0f };
-				if (ImGui::ColorEdit3("Color", color)) {
-					light->color.r = static_cast<uint8_t>(color[0] * 255.0f);
-					light->color.g = static_cast<uint8_t>(color[1] * 255.0f);
-					light->color.b = static_cast<uint8_t>(color[2] * 255.0f);
-				}
-				if (ImGui::IsItemActivated()) start_state = *light;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				ImGui::DragFloat("Intensity", &light->intensity, 0.1f, 0.0f, 100.0f);
-				if (ImGui::IsItemActivated()) start_state = *light;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				if (finished_editing) {
-					auto cmd = std::make_unique<editor::ModifyComponentCommand<me::components::DirectionalLightComponent>>(
-						entity, start_state, *light
-					);
-					command_history.AddCommand(std::move(cmd));
-				}
-
-				ImGui::TreePop();
-			}
-			ImGui::PopID();
-		}
+		ImGui::DragFloat("Intensity", &light->intensity, 0.1f, 0.0f, 100.0f);
+		track_edit(entity, light, command_history);
 	}
 
 	void InspectorPanel::draw_rigidbody(me::Entity entity, editor::CommandHistory& command_history) {
-		if (auto* rb = entity.try_get_component<me::components::RigidBodyComponent>()) {
-			ImGui::PushID("RigidBody");
+		auto* rb = entity.try_get_component<me::components::RigidBodyComponent>();
+		if (!rb) return;
 
-			float button_size = ImGui::GetFrameHeight();
-			bool opened = ImGui::TreeNodeEx("Rigid Body", s_TreeNodeFlags);
+		ComponentSection section("RigidBody", "Rigid Body");
+		if (section.remove_clicked()) { entity.remove_component<me::components::RigidBodyComponent>(); return; }
+		if (!section.body_visible()) return;
 
-			ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - button_size);
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-			bool remove_component = ImGui::Button("X", ImVec2(button_size, button_size));
-			ImGui::PopStyleColor();
-
-			if (remove_component) entity.remove_component<me::components::RigidBodyComponent>();
-
-			if (opened && !remove_component) {
-				static me::components::RigidBodyComponent start_state;
-				bool finished_editing = false;
-
-				const char* body_types[] = { "Static", "Dynamic", "Kinematic" };
-				int current_type = static_cast<int>(rb->type);
-				if (ImGui::Combo("Body Type", &current_type, body_types, 3)) {
-					rb->type = static_cast<me::components::RigidBodyType>(current_type);
-				}
-				if (ImGui::IsItemActivated()) start_state = *rb;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				if (rb->type == me::components::RigidBodyType::Dynamic) {
-					ImGui::DragFloat("Mass", &rb->mass, 0.1f, 0.001f, 1000.0f);
-					if (ImGui::IsItemActivated()) start_state = *rb;
-					if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-				}
-
-				ImGui::DragFloat("Bounciness", &rb->bounciness, 0.05f, 0.0f, 1.0f);
-				if (ImGui::IsItemActivated()) start_state = *rb;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				ImGui::DragFloat("Friction", &rb->friction, 0.05f, 0.0f, 10.0f);
-				if (ImGui::IsItemActivated()) start_state = *rb;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				if (finished_editing) {
-					auto cmd = std::make_unique<editor::ModifyComponentCommand<me::components::RigidBodyComponent>>(
-						entity, start_state, *rb
-					);
-					command_history.AddCommand(std::move(cmd));
-				}
-
-				ImGui::TreePop();
-			}
-			ImGui::PopID();
+		const char* body_types[] = { "Static", "Dynamic", "Kinematic" };
+		int current_type = static_cast<int>(rb->type);
+		if (ImGui::Combo("Body Type", &current_type, body_types, 3)) {
+			rb->type = static_cast<me::components::RigidBodyType>(current_type);
 		}
+		track_edit(entity, rb, command_history);
+
+		if (rb->type == me::components::RigidBodyType::Dynamic) {
+			ImGui::DragFloat("Mass", &rb->mass, 0.1f, 0.001f, 1000.0f);
+			track_edit(entity, rb, command_history);
+		}
+
+		ImGui::DragFloat("Bounciness", &rb->bounciness, 0.05f, 0.0f, 1.0f);
+		track_edit(entity, rb, command_history);
+
+		ImGui::DragFloat("Friction", &rb->friction, 0.05f, 0.0f, 10.0f);
+		track_edit(entity, rb, command_history);
 	}
 
 	void InspectorPanel::draw_box_collider(me::Entity entity, editor::CommandHistory& command_history) {
-		if (auto* col = entity.try_get_component<me::components::BoxColliderComponent>()) {
-			ImGui::PushID("BoxCollider");
+		auto* col = entity.try_get_component<me::components::BoxColliderComponent>();
+		if (!col) return;
 
-			float button_size = ImGui::GetFrameHeight();
-			bool opened = ImGui::TreeNodeEx("Box Collider", s_TreeNodeFlags);
+		ComponentSection section("BoxCollider", "Box Collider");
+		if (section.remove_clicked()) { entity.remove_component<me::components::BoxColliderComponent>(); return; }
+		if (!section.body_visible()) return;
 
-			ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - button_size);
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-			bool remove_component = ImGui::Button("X", ImVec2(button_size, button_size));
-			ImGui::PopStyleColor();
+		ImGui::DragFloat3("Half Extents", &col->half_extents.x, 0.1f, 0.01f, 100.0f);
+		track_edit(entity, col, command_history);
 
-			if (remove_component) entity.remove_component<me::components::BoxColliderComponent>();
-
-			if (opened && !remove_component) {
-				static me::components::BoxColliderComponent start_state;
-				bool finished_editing = false;
-
-				ImGui::DragFloat3("Half Extents", &col->half_extents.x, 0.1f, 0.01f, 100.0f);
-				if (ImGui::IsItemActivated()) start_state = *col;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				ImGui::Checkbox("Show Debug Wireframe", &col->show_debug);
-				if (ImGui::IsItemActivated()) start_state = *col;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				if (finished_editing) {
-					auto cmd = std::make_unique<editor::ModifyComponentCommand<me::components::BoxColliderComponent>>(
-						entity, start_state, *col
-					);
-					command_history.AddCommand(std::move(cmd));
-				}
-
-				ImGui::TreePop();
-			}
-			ImGui::PopID();
-		}
+		ImGui::Checkbox("Show Debug Wireframe", &col->show_debug);
+		track_edit(entity, col, command_history);
 	}
 
 	void InspectorPanel::draw_sphere_collider(me::Entity entity, editor::CommandHistory& command_history) {
-		if (auto* col = entity.try_get_component<me::components::SphereColliderComponent>()) {
-			ImGui::PushID("SphereCollider");
+		auto* col = entity.try_get_component<me::components::SphereColliderComponent>();
+		if (!col) return;
 
-			float button_size = ImGui::GetFrameHeight();
-			bool opened = ImGui::TreeNodeEx("Sphere Collider", s_TreeNodeFlags);
+		ComponentSection section("SphereCollider", "Sphere Collider");
+		if (section.remove_clicked()) { entity.remove_component<me::components::SphereColliderComponent>(); return; }
+		if (!section.body_visible()) return;
 
-			ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - button_size);
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-			bool remove_component = ImGui::Button("X", ImVec2(button_size, button_size));
-			ImGui::PopStyleColor();
+		ImGui::DragFloat("Radius", &col->radius, 0.1f, 0.01f, 100.0f);
+		track_edit(entity, col, command_history);
 
-			if (remove_component) entity.remove_component<me::components::SphereColliderComponent>();
-
-			if (opened && !remove_component) {
-				static me::components::SphereColliderComponent start_state;
-				bool finished_editing = false;
-
-				ImGui::DragFloat("Radius", &col->radius, 0.1f, 0.01f, 100.0f);
-				if (ImGui::IsItemActivated()) start_state = *col;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				ImGui::Checkbox("Show Debug Wireframe", &col->show_debug);
-				if (ImGui::IsItemActivated()) start_state = *col;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				if (finished_editing) {
-					auto cmd = std::make_unique<editor::ModifyComponentCommand<me::components::SphereColliderComponent>>(
-						entity, start_state, *col
-					);
-					command_history.AddCommand(std::move(cmd));
-				}
-
-				ImGui::TreePop();
-			}
-			ImGui::PopID();
-		}
+		ImGui::Checkbox("Show Debug Wireframe", &col->show_debug);
+		track_edit(entity, col, command_history);
 	}
 
 	void InspectorPanel::draw_audio_source(me::Entity entity, editor::CommandHistory& command_history) {
-		if (auto* audio = entity.try_get_component<me::components::AudioSourceComponent>()) {
-			ImGui::PushID("AudioSource");
+		auto* audio = entity.try_get_component<me::components::AudioSourceComponent>();
+		if (!audio) return;
 
-			float button_size = ImGui::GetFrameHeight();
-			bool opened = ImGui::TreeNodeEx("Audio Source", s_TreeNodeFlags);
+		ComponentSection section("AudioSource", "Audio Source");
+		if (section.remove_clicked()) {
+			if (audio->clip.handle != 0) me::audio::release(audio->clip);
+			entity.remove_component<me::components::AudioSourceComponent>();
+			return;
+		}
+		if (!section.body_visible()) return;
 
-			ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - button_size);
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-			bool remove_component = ImGui::Button("X", ImVec2(button_size, button_size));
-			ImGui::PopStyleColor();
+		ImGui::Text("Audio Clip");
+		ImGui::SameLine();
+		std::string btn_text = audio->filepath.empty() ? "Drag .wav / .ogg Here" : std::filesystem::path(audio->filepath).filename().string();
+		ImGui::Button(btn_text.c_str(), ImVec2(ImGui::GetContentRegionAvail().x, 0));
 
-			if (remove_component) {
-				if (audio->clip.handle != 0) me::audio::release(audio->clip);
-				entity.remove_component<me::components::AudioSourceComponent>();
+		if (ImGui::BeginDragDropTarget()) {
+			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("CONTENT_BROWSER_ITEM")) {
+				const char* dropped_path = (const char*)payload->Data;
+				std::filesystem::path fp = dropped_path;
+				if (fp.extension() == ".wav" || fp.extension() == ".ogg" || fp.extension() == ".mp3") {
+					if (audio->clip.handle != 0) me::audio::release(audio->clip);
+					audio->filepath = dropped_path;
+					audio->clip = me::audio::load(dropped_path);
+				}
 			}
+			ImGui::EndDragDropTarget();
+		}
 
-			if (opened && !remove_component) {
-				static me::components::AudioSourceComponent start_state;
-				bool finished_editing = false;
+		ImGui::DragFloat("Volume", &audio->volume, 0.05f, 0.0f, 10.0f);
+		track_edit(entity, audio, command_history);
 
-				ImGui::Text("Audio Clip");
-				ImGui::SameLine();
-				std::string btn_text = audio->filepath.empty() ? "Drag .wav / .ogg Here" : std::filesystem::path(audio->filepath).filename().string();
-				ImGui::Button(btn_text.c_str(), ImVec2(ImGui::GetContentRegionAvail().x, 0));
+		ImGui::DragFloat("Pitch", &audio->pitch, 0.05f, 0.1f, 3.0f);
+		track_edit(entity, audio, command_history);
 
-				if (ImGui::BeginDragDropTarget()) {
-					if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("CONTENT_BROWSER_ITEM")) {
-						const char* dropped_path = (const char*)payload->Data;
-						std::filesystem::path fp = dropped_path;
-						if (fp.extension() == ".wav" || fp.extension() == ".ogg" || fp.extension() == ".mp3") {
-							if (audio->clip.handle != 0) me::audio::release(audio->clip);
-							audio->filepath = dropped_path;
-							audio->clip = me::audio::load(dropped_path);
-						}
-					}
-					ImGui::EndDragDropTarget();
-				}
+		ImGui::Checkbox("Play on Awake", &audio->play_on_awake);
+		track_edit(entity, audio, command_history);
 
-				ImGui::DragFloat("Volume", &audio->volume, 0.05f, 0.0f, 10.0f);
-				if (ImGui::IsItemActivated()) start_state = *audio;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
+		ImGui::Separator();
+		ImGui::Checkbox("Enable 3D Spatial Audio", &audio->spatial);
+		track_edit(entity, audio, command_history);
 
-				ImGui::DragFloat("Pitch", &audio->pitch, 0.05f, 0.1f, 3.0f);
-				if (ImGui::IsItemActivated()) start_state = *audio;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
+		if (audio->spatial) {
+			ImGui::DragFloat("Max Distance", &audio->max_distance, 1.0f, 0.1f, 1000.0f);
+			track_edit(entity, audio, command_history);
+		}
 
-				ImGui::Checkbox("Play on Awake", &audio->play_on_awake);
-				if (ImGui::IsItemActivated()) start_state = *audio;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				ImGui::Separator();
-				ImGui::Checkbox("Enable 3D Spatial Audio", &audio->spatial);
-				if (ImGui::IsItemActivated()) start_state = *audio;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				if (audio->spatial) {
-					ImGui::DragFloat("Max Distance", &audio->max_distance, 1.0f, 0.1f, 1000.0f);
-					if (ImGui::IsItemActivated()) start_state = *audio;
-					if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-				}
-
-				ImGui::Separator();
-				if (ImGui::Button("Test Play", ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
-					audio->trigger_play = true;
-				}
-
-				if (finished_editing) {
-					auto cmd = std::make_unique<editor::ModifyComponentCommand<me::components::AudioSourceComponent>>(
-						entity, start_state, *audio
-					);
-					command_history.AddCommand(std::move(cmd));
-				}
-
-				ImGui::TreePop();
-			}
-			ImGui::PopID();
+		ImGui::Separator();
+		if (ImGui::Button("Test Play", ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
+			audio->trigger_play = true;
 		}
 	}
 
 	void InspectorPanel::draw_audio_listener(me::Entity entity, editor::CommandHistory& command_history) {
-		if (auto* listener = entity.try_get_component<me::components::AudioListenerComponent>()) {
-			ImGui::PushID("AudioListener");
+		auto* listener = entity.try_get_component<me::components::AudioListenerComponent>();
+		if (!listener) return;
 
-			float button_size = ImGui::GetFrameHeight();
-			bool opened = ImGui::TreeNodeEx("Audio Listener", s_TreeNodeFlags);
+		ComponentSection section("AudioListener", "Audio Listener");
+		if (section.remove_clicked()) { entity.remove_component<me::components::AudioListenerComponent>(); return; }
+		if (!section.body_visible()) return;
 
-			ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - button_size);
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-			bool remove_component = ImGui::Button("X", ImVec2(button_size, button_size));
-			ImGui::PopStyleColor();
-
-			if (remove_component) entity.remove_component<me::components::AudioListenerComponent>();
-
-			if (opened && !remove_component) {
-				static me::components::AudioListenerComponent start_state;
-				bool finished_editing = false;
-
-				ImGui::Checkbox("Active Listener", &listener->active);
-				if (ImGui::IsItemActivated()) start_state = *listener;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				if (finished_editing) {
-					auto cmd = std::make_unique<editor::ModifyComponentCommand<me::components::AudioListenerComponent>>(
-						entity, start_state, *listener
-					);
-					command_history.AddCommand(std::move(cmd));
-				}
-
-				ImGui::TreePop();
-			}
-			ImGui::PopID();
-		}
+		ImGui::Checkbox("Active Listener", &listener->active);
+		track_edit(entity, listener, command_history);
 	}
 
 	void InspectorPanel::draw_background_music(me::Entity entity, editor::CommandHistory& command_history) {
-		if (auto* bgm = entity.try_get_component<me::components::BackgroundMusicComponent>()) {
-			ImGui::PushID("BackgroundMusic");
+		auto* bgm = entity.try_get_component<me::components::BackgroundMusicComponent>();
+		if (!bgm) return;
 
-			float button_size = ImGui::GetFrameHeight();
-			bool opened = ImGui::TreeNodeEx("Background Music", s_TreeNodeFlags);
-
-			ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - button_size);
-			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
-			bool remove_component = ImGui::Button("X", ImVec2(button_size, button_size));
-			ImGui::PopStyleColor();
-
-			if (remove_component) {
-				if (bgm->stream.handle != 0) me::audio::release(bgm->stream);
-				entity.remove_component<me::components::BackgroundMusicComponent>();
-			}
-
-			if (opened && !remove_component) {
-				static me::components::BackgroundMusicComponent start_state;
-				bool finished_editing = false;
-
-				ImGui::Text("Audio Track");
-				ImGui::SameLine();
-				std::string btn_text = bgm->filepath.empty() ? "Drag .wav / .ogg Here" : std::filesystem::path(bgm->filepath).filename().string();
-				ImGui::Button(btn_text.c_str(), ImVec2(ImGui::GetContentRegionAvail().x, 0));
-
-				if (ImGui::BeginDragDropTarget()) {
-					if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("CONTENT_BROWSER_ITEM")) {
-						const char* dropped_path = (const char*)payload->Data;
-						std::filesystem::path fp = dropped_path;
-						if (fp.extension() == ".wav" || fp.extension() == ".ogg" || fp.extension() == ".mp3") {
-							if (bgm->stream.handle != 0) me::audio::release(bgm->stream);
-							bgm->filepath = dropped_path;
-							bgm->stream = me::audio::load_music(dropped_path);
-						}
-					}
-					ImGui::EndDragDropTarget();
-				}
-
-				ImGui::DragFloat("Volume", &bgm->volume, 0.05f, 0.0f, 10.0f);
-				if (ImGui::IsItemActivated()) start_state = *bgm;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				ImGui::Checkbox("Loop Track", &bgm->loop);
-				if (ImGui::IsItemActivated()) start_state = *bgm;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				ImGui::Checkbox("Play on Awake", &bgm->play_on_awake);
-				if (ImGui::IsItemActivated()) start_state = *bgm;
-				if (ImGui::IsItemDeactivatedAfterEdit()) finished_editing = true;
-
-				ImGui::Separator();
-				ImGui::TextDisabled("Playback Controls");
-
-				if (ImGui::Button("Play", ImVec2(50, 0))) bgm->trigger_play = true;
-				ImGui::SameLine();
-				if (ImGui::Button("Pause", ImVec2(50, 0))) bgm->trigger_pause = true;
-				ImGui::SameLine();
-				if (ImGui::Button("Resume", ImVec2(60, 0))) bgm->trigger_resume = true;
-				ImGui::SameLine();
-				if (ImGui::Button("Stop", ImVec2(50, 0))) bgm->trigger_stop = true;
-
-				if (finished_editing) {
-					auto cmd = std::make_unique<editor::ModifyComponentCommand<me::components::BackgroundMusicComponent>>(
-						entity, start_state, *bgm
-					);
-					command_history.AddCommand(std::move(cmd));
-				}
-
-				ImGui::TreePop();
-			}
-			ImGui::PopID();
+		ComponentSection section("BackgroundMusic", "Background Music");
+		if (section.remove_clicked()) {
+			if (bgm->stream.handle != 0) me::audio::release(bgm->stream);
+			entity.remove_component<me::components::BackgroundMusicComponent>();
+			return;
 		}
+		if (!section.body_visible()) return;
+
+		ImGui::Text("Audio Track");
+		ImGui::SameLine();
+		std::string btn_text = bgm->filepath.empty() ? "Drag .wav / .ogg Here" : std::filesystem::path(bgm->filepath).filename().string();
+		ImGui::Button(btn_text.c_str(), ImVec2(ImGui::GetContentRegionAvail().x, 0));
+
+		if (ImGui::BeginDragDropTarget()) {
+			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("CONTENT_BROWSER_ITEM")) {
+				const char* dropped_path = (const char*)payload->Data;
+				std::filesystem::path fp = dropped_path;
+				if (fp.extension() == ".wav" || fp.extension() == ".ogg" || fp.extension() == ".mp3") {
+					if (bgm->stream.handle != 0) me::audio::release(bgm->stream);
+					bgm->filepath = dropped_path;
+					bgm->stream = me::audio::load_music(dropped_path);
+				}
+			}
+			ImGui::EndDragDropTarget();
+		}
+
+		ImGui::DragFloat("Volume", &bgm->volume, 0.05f, 0.0f, 10.0f);
+		track_edit(entity, bgm, command_history);
+
+		ImGui::Checkbox("Loop Track", &bgm->loop);
+		track_edit(entity, bgm, command_history);
+
+		ImGui::Checkbox("Play on Awake", &bgm->play_on_awake);
+		track_edit(entity, bgm, command_history);
+
+		ImGui::Separator();
+		ImGui::TextDisabled("Playback Controls");
+
+		if (ImGui::Button("Play", ImVec2(50, 0))) bgm->trigger_play = true;
+		ImGui::SameLine();
+		if (ImGui::Button("Pause", ImVec2(50, 0))) bgm->trigger_pause = true;
+		ImGui::SameLine();
+		if (ImGui::Button("Resume", ImVec2(60, 0))) bgm->trigger_resume = true;
+		ImGui::SameLine();
+		if (ImGui::Button("Stop", ImVec2(50, 0))) bgm->trigger_stop = true;
 	}
 
 	void InspectorPanel::draw_script(me::Entity entity) {
@@ -771,7 +534,6 @@ namespace editor {
 			if (!entity.try_get_component<me::components::Model3DComponent>() && ImGui::MenuItem("3D Model"))
 				entity.add_component<me::components::Model3DComponent>(me::components::Model3DComponent{ 0, me::Color::white });
 
-			// --- ADD MATERIAL COMPONENT TO MENU ---
 			if (!entity.try_get_component<me::components::MaterialComponent>() && ImGui::MenuItem("Material"))
 				entity.add_component<me::components::MaterialComponent>(me::components::MaterialComponent{});
 

@@ -27,6 +27,20 @@
 
 namespace editor {
 
+	namespace {
+		// Copies each present value-type component from src to dst in one fold.
+		// Note: handle-owning components (Model3D, AudioSource, BackgroundMusic) copy
+		// their cache handle without bumping the refcount — matching the long-standing
+		// duplicate behavior; deep asset cloning is a separate concern.
+		template <typename... Components>
+		void clone_components(me::Registry& reg, me::entity::entity_id src, me::entity::entity_id dst) {
+			([&] {
+				if (auto* c = reg.try_get_component<Components>(src))
+					reg.add_component<Components>(dst, *c);
+			}(), ...);
+		}
+	}
+
 	void EditorApp::on_start() {
 		me::input::bind_digital_axis("MoveY", me::input::Key::Q, me::input::Key::E, 1.0f);
 
@@ -474,67 +488,31 @@ namespace editor {
 				auto new_ent = reg.create_entity();
 				new_ent.add_component<me::components::TagComponent>({ new_name });
 
-				// Transform
-				if (auto* t = reg.try_get_component<me::components::TransformComponent>(selected))
-					new_ent.add_component<me::components::TransformComponent>(*t);
+				// Copy every value-type component in one shot. Tag (renamed above) and
+				// Script (needs fresh per-instance runtime state) are handled separately.
+				clone_components<
+					me::components::TransformComponent,
+					me::components::Shape3DComponent,
+					me::components::Model3DComponent,
+					me::components::MaterialComponent,
+					me::components::LightComponent,
+					me::components::DirectionalLightComponent,
+					me::components::CameraComponent,
+					me::components::Camera2DComponent,
+					me::components::Shape2DComponent,
+					me::components::SpriteComponent,
+					me::components::RigidBodyComponent,
+					me::components::BoxColliderComponent,
+					me::components::SphereColliderComponent,
+					me::components::AudioListenerComponent,
+					me::components::AudioSourceComponent,
+					me::components::BackgroundMusicComponent
+				>(reg, selected, new_ent.get_id());
 
-				// --- 3D Graphics ---
-				if (auto* s = reg.try_get_component<me::components::Shape3DComponent>(selected))
-					new_ent.add_component<me::components::Shape3DComponent>(*s);
-
-				if (auto* m = reg.try_get_component<me::components::Model3DComponent>(selected))
-					new_ent.add_component<me::components::Model3DComponent>(*m);
-
-				if (auto* mat = reg.try_get_component<me::components::MaterialComponent>(selected))
-					new_ent.add_component<me::components::MaterialComponent>(*mat);
-
-				// --- Lighting ---
-				if (auto* l = reg.try_get_component<me::components::LightComponent>(selected))
-					new_ent.add_component<me::components::LightComponent>(*l);
-
-				if (auto* dl = reg.try_get_component<me::components::DirectionalLightComponent>(selected))
-					new_ent.add_component<me::components::DirectionalLightComponent>(*dl);
-
-				// --- Cameras ---
-				if (auto* c = reg.try_get_component<me::components::CameraComponent>(selected))
-					new_ent.add_component<me::components::CameraComponent>(*c);
-
-				if (auto* c2 = reg.try_get_component<me::components::Camera2DComponent>(selected))
-					new_ent.add_component<me::components::Camera2DComponent>(*c2);
-
-				// --- 2D Graphics ---
-				if (auto* s2 = reg.try_get_component<me::components::Shape2DComponent>(selected))
-					new_ent.add_component<me::components::Shape2DComponent>(*s2);
-
-				if (auto* sp = reg.try_get_component<me::components::SpriteComponent>(selected))
-					new_ent.add_component<me::components::SpriteComponent>(*sp);
-
-				// --- Physics ---
-				if (auto* rb = reg.try_get_component<me::components::RigidBodyComponent>(selected))
-					new_ent.add_component<me::components::RigidBodyComponent>(*rb);
-
-				if (auto* bc = reg.try_get_component<me::components::BoxColliderComponent>(selected))
-					new_ent.add_component<me::components::BoxColliderComponent>(*bc);
-
-				if (auto* sc = reg.try_get_component<me::components::SphereColliderComponent>(selected))
-					new_ent.add_component<me::components::SphereColliderComponent>(*sc);
-
-				// --- Audio ---
-				if (auto* al = reg.try_get_component<me::components::AudioListenerComponent>(selected))
-					new_ent.add_component<me::components::AudioListenerComponent>(*al);
-
-				if (auto* as = reg.try_get_component<me::components::AudioSourceComponent>(selected))
-					new_ent.add_component<me::components::AudioSourceComponent>(*as);
-
-				if (auto* bgm = reg.try_get_component<me::components::BackgroundMusicComponent>(selected))
-					new_ent.add_component<me::components::BackgroundMusicComponent>(*bgm);
-
-				// --- Scripts (Special handling for vector of instances) ---
+				// Scripts clone by path only, so the copy re-initializes its own Lua state.
 				if (auto* sc = reg.try_get_component<me::components::ScriptComponent>(selected)) {
 					me::components::ScriptComponent new_sc;
-					for (const auto& script : sc->scripts) {
-						new_sc.scripts.push_back({ script.path });
-					}
+					for (const auto& script : sc->scripts) new_sc.scripts.push_back({ script.path });
 					new_ent.add_component<me::components::ScriptComponent>(new_sc);
 				}
 

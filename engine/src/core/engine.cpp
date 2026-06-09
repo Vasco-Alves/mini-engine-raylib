@@ -91,6 +91,11 @@ namespace me {
 
 			app.on_update(dt);
 
+			// Pump streamed music buffers each frame (one-shot sounds don't need this).
+			// Runs regardless of play state so the inspector's BGM Play/Pause controls
+			// work while editing, not just in play mode.
+			me::audio::update();
+
 			BeginDrawing();
 			ClearBackground({ 0, 0, 0, 0 });
 			app.on_render();
