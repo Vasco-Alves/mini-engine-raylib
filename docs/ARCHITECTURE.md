@@ -165,16 +165,17 @@ wraps `std::filesystem` and auto-resolves `scheme://` paths.
    `name`, a `save`/`load` pair, and — only if it owns a GPU/audio handle — an `on_destroy`.
    That single entry drives scene serialization, entity duplication, and handle cleanup
    (`me::ecs::clone_entity` / `release_native_handles` iterate the registry).
-3. **Inspect** it (editor): add a `draw_*` method in
+3. **Inspect** it (editor): write a `draw_*` function in
    [`inspector_panel.cpp`](../editor/src/panels/inspector_panel.cpp) using the
-   `ComponentSection` / `track_edit` helpers, call it from `on_imgui_render`, and add an entry
-   to `draw_add_component_menu`.
+   `ComponentSection` / `track_edit` helpers, and add one row to the `inspector_components()`
+   table — that single row drives both the Inspector panel and the Add-Component menu.
 4. **Expose to Lua** (optional): bind it in
    [`script_manager.cpp`](../engine/src/scripting/script_manager.cpp).
 
 Step 2 replaces what used to be four separate hand-maintained lists (save, load, duplicate,
-deletion). The editor-side inspector (step 3) is the remaining per-component UI — folding it
-into a parallel editor-side registry is a natural follow-up.
+deletion); step 3's table did the same for the editor's panel dispatch and Add-Component menu.
+A component's whole footprint is now one engine registry entry + one editor table row (plus its
+bespoke inspector body).
 
 A headless [round-trip test](../tests/scene_roundtrip.cpp) (`scene_roundtrip_test`) exercises
 every registered component through save → load → save and guards the on-disk format.
@@ -191,10 +192,10 @@ table.
 The architecture is sound; most friction comes from hand-maintained per-component lists.
 In rough priority:
 
-1. **Centralize component registration.** *(Largely done.)*
-   [`component_registry.cpp`](../engine/src/ecs/component_registry.cpp) is now the single source
-   of truth, driving scene save/load, entity duplication, and native-handle cleanup. The
-   editor-side inspector panels + add-component menu are the remaining per-component code.
+1. **Centralize component registration.** *(Done.)*
+   [`component_registry.cpp`](../engine/src/ecs/component_registry.cpp) drives scene save/load,
+   entity duplication, and native-handle cleanup; the editor's `inspector_components()` table
+   drives the Inspector panels and the Add-Component menu. New components register once per side.
 2. **A single `world_update(dt)` in the engine** that both the editor and any game share, so
    system order can't drift between front-ends.
 3. **Finish or fence off the 2D path** (`render_2d`, sprites, `Shape2D`, `Camera2D`). Their data

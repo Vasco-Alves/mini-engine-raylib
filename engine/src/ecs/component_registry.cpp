@@ -42,15 +42,15 @@ namespace me::ecs {
 			m.has = [](Registry& r, entity::entity_id e) { return r.has_component<T>(e); };
 			m.save = [save_fn](Registry& r, entity::entity_id e) -> json {
 				return save_fn(*r.try_get_component<T>(e));
-				};
+			};
 			m.load = [load_fn](Registry& r, entity::entity_id e, const json& j) {
 				T c{};
 				load_fn(c, j);
 				r.add_component<T>(e, c);
-				};
+			};
 			m.clone = [](Registry& r, entity::entity_id s, entity::entity_id d) {
 				if (auto* c = r.try_get_component<T>(s)) r.add_component<T>(d, *c);
-				};
+			};
 			m.on_destroy = std::move(on_destroy);
 			return m;
 		}
@@ -145,21 +145,21 @@ namespace me::ecs {
 					json arr = json::array();
 					for (const auto& inst : sc->scripts) arr.push_back({ {"path", inst.path} });
 					return json{ {"scripts", arr} };
-					};
+				};
 				m.load = [](Registry& reg, entity::entity_id e, const json& j) {
 					ScriptComponent sc;
 					if (j.contains("path")) sc.scripts.push_back({ j.value("path", "") });
 					else if (j.contains("scripts") && j["scripts"].is_array())
 						for (const auto& s : j["scripts"]) sc.scripts.push_back({ s.value("path", "") });
 					if (!sc.scripts.empty()) reg.add_component<ScriptComponent>(e, sc);
-					};
+				};
 				m.clone = [](Registry& reg, entity::entity_id s, entity::entity_id d) {
 					if (auto* sc = reg.try_get_component<ScriptComponent>(s)) {
 						ScriptComponent fresh;
 						for (const auto& inst : sc->scripts) fresh.scripts.push_back({ inst.path });
 						reg.add_component<ScriptComponent>(d, fresh);
 					}
-					};
+				};
 				r.push_back(std::move(m));
 			}
 
