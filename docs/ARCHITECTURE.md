@@ -41,40 +41,41 @@ play/pause/step controls) backed by a single static `EngineState`
 `me::run` owns the main loop. Each frame it:
 
 1. polls input and updates window state,
-2. runs `script_update(dt)` **if playing and not paused** (or one fixed step when
-   single-stepping),
-3. runs `transform_update()` to rebuild dirty world matrices,
-4. calls `app.on_update(dt)`,
+2. calls `me::world_update(dt)` — the canonical simulation step: **scripts → physics →
+   transforms** (scripts and physics gated by play/pause/step; transforms always run),
+3. calls `app.on_update(dt)`,
+4. pumps streamed music (`me::audio::update()`),
 5. brackets `app.on_render()` between `BeginDrawing` / `EndDrawing`,
-6. processes deferred ECS deletions, releasing native handles (audio/model) first.
+6. processes deferred ECS deletions, releasing native handles (audio/model/texture) first.
 
-Note that **physics, audio streaming, and rendering systems are not driven by `me::run`** —
-they're invoked by the consumer inside `on_update` / `on_render`. The editor does this in
-[`editor_app.cpp`](../editor/src/core/editor_app.cpp). This keeps the core loop minimal but
-means the per-frame system order lives in the consumer, not in one shared place (see
-[Recommended cleanups](#recommended-cleanups)).
+`world_update` runs physics *before* the transform pass, so a body moved by physics gets its
+world matrix rebuilt the same frame (no one-frame lag). The **spatial-audio** system and all
+**rendering/tooling** stay consumer-side — the editor calls them in `on_update` / `on_render`,
+since the audio listener and the viewport are front-end-specific.
 
 ### Per-frame order in the editor
 
 ```
 me::run:
   input::poll
-  (if playing) systems::script_update(dt)      // Lua start/update, hot-reload
-  systems::transform_update()                  // hierarchy → world matrices
+  world_update(dt):                            // shared simulation order
+      (if playing) script_update -> physics::update   // logic sets velocities, Jolt integrates
+      transform_update                                 // hierarchy → world matrices (post-physics)
   EditorApp::on_update(dt):
       file-drop import, editor camera fly/orbit
-      (if playing) physics::update(dt)         // Jolt step → write back transforms
       (if rendering) raytracer.on_update(...)
       poll_shortcuts()
-      systems::audio_update(...)               // 3D pan/attenuation, triggers
+      systems::audio_update(...)               // 3D pan/attenuation, triggers (front-end listener)
+  audio::update()                              // pump music streams
   EditorApp::on_render():
       viewport: render::render_world(editor cam) + gizmo/light/physics debug draw
       ImGui: panels, toolbar, menus, modals
   registry.process_deletions(...)
 ```
 
-The intended *gameplay* order (logic → physics → reactions → visuals) is sketched in
-`system_order_updates.txt`; the editor's order above is the real, current one.
+The canonical simulation order now lives in `me::world_update`; the older
+`system_order_updates.txt` sketch predates it. Editor-only concerns (camera, tooling, spatial
+audio) layer on top in `on_update` / `on_render`.
 
 ## ECS model
 
@@ -196,15 +197,15 @@ In rough priority:
    [`component_registry.cpp`](../engine/src/ecs/component_registry.cpp) drives scene save/load,
    entity duplication, and native-handle cleanup; the editor's `inspector_components()` table
    drives the Inspector panels and the Add-Component menu. New components register once per side.
-2. **A single `world_update(dt)` in the engine** that both the editor and any game share, so
-   system order can't drift between front-ends.
-3. **Finish or fence off the 2D path** (`render_2d`, sprites, `Shape2D`, `Camera2D`). Their data
+2. **Finish or fence off the 2D path** (`render_2d`, sprites, `Shape2D`, `Camera2D`). Their data
    now serializes via the registry; what's missing is the editor actually drawing them.
-4. **One sentinel for "no entity"** — replace literal `0xFFFFFFFF` with `me::entity::null`
+3. **One sentinel for "no entity"** — replace literal `0xFFFFFFFF` with `me::entity::null`
    semantics consistently.
 
 > Already addressed during the review: `me::audio::update()` is now pumped every frame
 > (background music streams); the inspector no longer leaves the ImGui tree stack unbalanced
 > when a component is removed while expanded; serialization/duplication/handle-cleanup are
-> unified behind the component registry; and `SpriteComponent` now persists (it was silently
-> dropped on save before).
+> unified behind the component registry; `SpriteComponent` now persists (it was silently
+> dropped on save before); and the per-frame simulation order is unified in `me::world_update`
+> (scripts → physics → transforms), fixing a one-frame physics lag and removing the editor's
+> separate physics-step path.

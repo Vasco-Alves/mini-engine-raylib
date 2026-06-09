@@ -11,6 +11,11 @@ namespace me {
 	bool init(const AppConfig& config);
 	void run(Application& app, const AppConfig& config = {});
 
+	// Advances the simulation one frame (scripts -> physics -> transforms), honoring
+	// play/pause/step state. run() already calls this each frame before on_update();
+	// exposed for front-ends that drive their own loop.
+	void world_update(float dt);
+
 	// Global Accessors
 	Registry& get_registry();
 

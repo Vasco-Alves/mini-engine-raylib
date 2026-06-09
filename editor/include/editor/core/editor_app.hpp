@@ -93,9 +93,6 @@ namespace editor {
 		bool m_IsFlying = false;
 		Vector3 m_OrbitTarget = { 0.0f, 0.0f, 0.0f };
 
-		// --- Physics ---
-		bool m_StepPhysicsNextFrame = false;
-
 		// --- Sub-Systems ---
 		me::systems::RaytracerSystem m_Raytracer;
 

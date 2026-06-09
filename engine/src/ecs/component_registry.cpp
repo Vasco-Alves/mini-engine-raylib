@@ -36,7 +36,8 @@ namespace me::ecs {
 		// Builds a ComponentMeta for the common case (generic has/clone) from a
 		// save function `json(const T&)` and a load function `void(T&, const json&)`.
 		template <typename T, typename SaveFn, typename LoadFn>
-		ComponentMeta meta(const char* name, SaveFn save_fn, LoadFn load_fn, std::function<void(Registry&, entity::entity_id)> on_destroy = nullptr) {
+		ComponentMeta meta(const char* name, SaveFn save_fn, LoadFn load_fn,
+			std::function<void(Registry&, entity::entity_id)> on_destroy = nullptr) {
 			ComponentMeta m;
 			m.name = name;
 			m.has = [](Registry& r, entity::entity_id e) { return r.has_component<T>(e); };

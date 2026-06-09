@@ -8,6 +8,7 @@
 #include "mini-engine-raylib/scripting/script_manager.hpp" 
 #include "mini-engine-raylib/systems/script_system.hpp"
 #include "mini-engine-raylib/systems/transform_system.hpp"
+#include "mini-engine-raylib/systems/physics_system.hpp"
 #include <mini-ecs/registry.hpp>
 
 #include "mini-engine-raylib/ecs/components.hpp"
@@ -54,6 +55,29 @@ namespace me {
 		return true;
 	}
 
+	void world_update(float dt) {
+		// Canonical per-frame simulation order, shared by every front-end:
+		//   1. scripts  — game logic sets velocities and spawns entities
+		//   2. physics  — integrates those velocities, writes back positions
+		//   3. transforms — rebuild world matrices from the post-physics positions
+		// Doing physics before the transform pass means the same frame renders the new
+		// state (no one-frame lag). Scripts + physics are gated by play/pause/step;
+		// transforms always run so edit-mode gizmo/inspector edits still rebuild.
+		if (s_State.is_playing) {
+			if (!s_State.is_paused) {
+				me::systems::script_update(dt);
+				me::physics::update(*s_State.registry, dt);
+			} else if (s_State.step_frames > 0) {
+				const float fixed_dt = 1.0f / 60.0f;
+				me::systems::script_update(fixed_dt);
+				me::physics::update(*s_State.registry, fixed_dt);
+				s_State.step_frames--;
+			}
+		}
+
+		me::systems::transform_update();
+	}
+
 	void run(Application& app, const AppConfig& config) {
 		if (!init(config)) return;
 
@@ -78,17 +102,8 @@ namespace me {
 			float dt = GetFrameTime();
 			me::input::poll();
 
-			if (s_State.is_playing) {
-				if (!s_State.is_paused) {
-					me::systems::script_update(dt);
-				} else if (s_State.step_frames > 0) {
-					float fixed_dt = 1.0f / 60.0f;
-					me::systems::script_update(fixed_dt);
-					s_State.step_frames--;
-				}
-			}
-
-			me::systems::transform_update();
+			// Advance the world (scripts -> physics -> transforms) in one shared order.
+			world_update(dt);
 
 			app.on_update(dt);
 

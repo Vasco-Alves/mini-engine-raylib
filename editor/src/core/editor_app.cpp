@@ -134,17 +134,6 @@ namespace editor {
 			}
 		}
 
-		// Step the physics simulation
-		if (me::is_playing()) {
-			if (!me::is_paused() || m_StepPhysicsNextFrame) {
-
-				float physics_dt = me::is_paused() ? (1.0f / 60.0f) : dt;
-				me::physics::update(me::get_registry(), physics_dt);
-
-				m_StepPhysicsNextFrame = false;
-			}
-		}
-
 		// ==========================================
 		// RAYTRACER UPDATE
 		// ==========================================
@@ -834,7 +823,6 @@ namespace editor {
 			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
 			if (ImGui::Button("STEP", ImVec2(60, button_size))) {
 				me::step(1);
-				m_StepPhysicsNextFrame = true;
 			}
 			ImGui::PopStyleColor();
 			if (!is_paused) ImGui::EndDisabled();
