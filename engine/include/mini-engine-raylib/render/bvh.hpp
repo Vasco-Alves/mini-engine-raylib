@@ -93,7 +93,6 @@ namespace me::raytracing {
 			subdivide(0, 0, static_cast<uint32_t>(m_triangle_indices.size()));
 		}
 
-		// THE NEW FAST TRAVERSAL (Replaces brute_force_intersect)
 		bool intersect(const Vector3& local_origin, const Vector3& local_dir, float& out_t, Vector3& out_normal) const {
 			if (m_nodes.empty()) return false;
 
@@ -119,7 +118,7 @@ namespace me::raytracing {
 				}
 
 				if (node.is_leaf()) {
-					// We reached the bottom! Test the 1 or 2 triangles inside this tiny box.
+					// We reached the bottom. Test the 1 or 2 triangles inside this tiny box.
 					for (uint32_t i = node.first_triangle; i < node.first_triangle + node.triangle_count; ++i) {
 						const Triangle& tri = m_triangles[m_triangle_indices[i]];
 						float t, u, v;
@@ -149,11 +148,12 @@ namespace me::raytracing {
 			return hit;
 		}
 
-	private:
+	public:
 		std::vector<Triangle> m_triangles;
 		std::vector<TriangleNode> m_nodes;
 		std::vector<uint32_t> m_triangle_indices;
 
+	private:
 		// Helper to get the center point of a triangle
 		Vector3 get_centroid(const Triangle& t) const {
 			return { (t.v0.x + t.v1.x + t.v2.x) / 3.0f, (t.v0.y + t.v1.y + t.v2.y) / 3.0f, (t.v0.z + t.v1.z + t.v2.z) / 3.0f };
@@ -440,10 +440,10 @@ namespace me::raytracing {
 
 		bool empty() const { return m_nodes.empty(); }
 
-	private:
+	public:
 		// ----------------------------------------------------------
-		// Internal primitive record
-		// ----------------------------------------------------------
+	// Internal primitive record
+	// ----------------------------------------------------------
 		struct Prim {
 			me::entity::entity_id entity;
 			AABB                  aabb;
@@ -453,6 +453,9 @@ namespace me::raytracing {
 		std::vector<uint32_t> m_prim_indices; // sorted during build, stable after
 		std::vector<Prim>     m_prims;
 
+
+
+	private:
 		// ----------------------------------------------------------
 		// Build helpers
 		// ----------------------------------------------------------

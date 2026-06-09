@@ -29,7 +29,9 @@ namespace me {
 	bool init(const AppConfig& config) {
 		s_State.config = config;
 
-		if (config.vsync) SetConfigFlags(FLAG_VSYNC_HINT);
+		if (config.vsync)
+			SetConfigFlags(FLAG_VSYNC_HINT);
+
 		SetConfigFlags(FLAG_WINDOW_RESIZABLE);
 
 		InitWindow(config.width, config.height, config.title.c_str());

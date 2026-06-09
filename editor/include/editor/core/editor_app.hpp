@@ -80,6 +80,7 @@ namespace editor {
 		int m_ExportCurrentSample = 0;
 		int m_PreviewW = 0;
 		int m_PreviewH = 0;
+		int m_ExportSavedPreviewSamples = 50;
 		std::string m_ExportPath = "";
 
 		// --- Camera ---

@@ -41,6 +41,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # Raylib
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
+add_definitions(-DGRAPHICS_API_OPENGL_43)
 add_subdirectory(vendor/raylib)
 
 # nlohmann_json
@@ -55,12 +56,22 @@ add_subdirectory(vendor/imgui)
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/vendor/lua/src")
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/vendor/sol3/include")
 
-# Jolt Physics 
+# Jolt Physics
 set(TARGET_UNIT_TESTS OFF CACHE BOOL "Don't build Jolt unit tests" FORCE)
 set(TARGET_HELLO_WORLD OFF CACHE BOOL "Don't build Jolt hello world" FORCE)
 set(TARGET_PERFORMANCE_TEST OFF CACHE BOOL "Don't build Jolt performance test" FORCE)
 set(USE_AVX2 ON CACHE BOOL "Use AVX2 instructions for physics math" FORCE)
 set(USE_STATIC_MSVC_RUNTIME_LIBRARY ON CACHE BOOL "Force Jolt to use Static" FORCE)
+
+# OVERRIDE_CXX_FLAGS=ON (Jolt's default) replaces CMAKE_CXX_FLAGS_DEBUG with its
+# own flags that strip the debug-CRT markers, causing _ITERATOR_DEBUG_LEVEL=0 in
+# Jolt while the rest of the project uses IDL=2 in Debug — a hard linker error.
+# Turning it OFF lets Jolt inherit the project's standard debug/release flags.
+set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "Prevent Jolt from replacing project CXX flags" FORCE)
+
+# Jolt's /Wall /WX spills into the build diagnostics; silence it.
+set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "Disable Jolt strict warnings" FORCE)
+
 add_subdirectory(vendor/joltphysics/Build)
 
 # ==========================================

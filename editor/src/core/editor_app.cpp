@@ -51,6 +51,13 @@ namespace editor {
 
 		me::render::init();
 		me::physics::init();
+
+		// Reset GPU accumulation whenever a scene property is edited, undone, or redone.
+		m_CommandHistory.on_scene_changed = [this]() {
+			if (m_SceneState == SceneState::Render) {
+				m_Raytracer.reset_accumulation(&me::get_registry());
+			}
+			};
 	}
 
 	void EditorApp::on_shutdown() {
@@ -295,7 +302,25 @@ namespace editor {
 		// RAYTRACER SETTINGS WINDOW
 		// ==========================================
 		if (m_SceneState == SceneState::Render) {
+			// Recreate the output texture when the viewport is resized (window or panel drag).
+			// Uses resize() — not on_stop/on_start — to preserve the shader and SSBOs.
+			int new_w = (int)(m_ViewportPanel.get_bounds().x * m_Raytracer.resolution_scale);
+			int new_h = (int)(m_ViewportPanel.get_bounds().y * m_Raytracer.resolution_scale);
+			if (new_w < 1) new_w = 1;
+			if (new_h < 1) new_h = 1;
+			if (new_w != m_Raytracer.get_width() || new_h != m_Raytracer.get_height()) {
+				m_Raytracer.resize(new_w, new_h);
+			}
+
 			ImGui::Begin("Raytracer Settings");
+
+			// --- BACKEND TOGGLE ---
+			const char* backend_names[] = { "CPU PathTracer", "GPU Compute Shader" };
+			int current_backend = (int)m_Raytracer.current_backend;
+			if (ImGui::Combo("Backend", &current_backend, backend_names, IM_ARRAYSIZE(backend_names))) {
+				m_Raytracer.current_backend = (me::systems::RenderBackend)current_backend;
+				m_Raytracer.reset_accumulation(&me::get_registry());
+			}
 
 			ImGui::Text("Frames Accumulated: %d / %d", m_Raytracer.get_accumulated_frames(), m_Raytracer.preview_samples);
 
@@ -319,12 +344,37 @@ namespace editor {
 				int new_h = (int)(m_ViewportPanel.get_bounds().y * m_Raytracer.resolution_scale);
 				if (new_w < 1) new_w = 1;
 				if (new_h < 1) new_h = 1;
-
-				m_Raytracer.on_stop();
-				m_Raytracer.on_start(new_w, new_h);
+				m_Raytracer.resize(new_w, new_h);
 			}
 
-			if (ImGui::SliderInt("Max Bounces", &m_Raytracer.max_bounces, 1, 10)) {
+			if (ImGui::SliderInt("Max Bounces", &m_Raytracer.max_bounces, 1, 16)) {
+				m_Raytracer.reset_accumulation();
+			}
+
+			// --- ENVIRONMENT (sky + ambient) — applies to CPU and GPU backends ---
+			ImGui::Dummy(ImVec2(0, 6));
+			ImGui::Separator();
+			ImGui::TextDisabled("Environment");
+
+			// Ambient fill: the occlusion-free brightness floor. 0 = true black
+			// where no direct/indirect light reaches.
+			if (ImGui::SliderFloat("Ambient Fill", &m_Raytracer.ambient_strength, 0.0f, 1.0f, "%.3f")) {
+				m_Raytracer.reset_accumulation();
+			}
+			// Sky gradient: also the background for rays that escape the scene.
+			if (ImGui::ColorEdit3("Sky Horizon", &m_Raytracer.sky_horizon_color.x)) {
+				m_Raytracer.reset_accumulation();
+			}
+			if (ImGui::ColorEdit3("Sky Zenith", &m_Raytracer.sky_zenith_color.x)) {
+				m_Raytracer.reset_accumulation();
+			}
+			// Master sky brightness. 0 = pure black background.
+			if (ImGui::SliderFloat("Sky Intensity", &m_Raytracer.sky_intensity, 0.0f, 2.0f, "%.2f")) {
+				m_Raytracer.reset_accumulation();
+			}
+			// One-click escape hatch from a black-screen / over-tweaked state.
+			if (ImGui::SmallButton("Reset Environment")) {
+				m_Raytracer.reset_environment();
 				m_Raytracer.reset_accumulation();
 			}
 
@@ -893,8 +943,8 @@ namespace editor {
 		}
 
 		// ==========================================
-	// 2. EXPORT RENDER MODAL (Settings)
-	// ==========================================
+		// 2. EXPORT RENDER MODAL (Settings)
+		// ==========================================
 		if (m_ShowExportModal) ImGui::OpenPopup("Export High-Res Render");
 		if (ImGui::BeginPopupModal("Export High-Res Render", &m_ShowExportModal, ImGuiWindowFlags_AlwaysAutoResize)) {
 
@@ -924,9 +974,12 @@ namespace editor {
 				m_PreviewW = m_Raytracer.get_width();
 				m_PreviewH = m_Raytracer.get_height();
 
-				// 3. Re-initialize buffers for High-Res
-				m_Raytracer.on_stop();
-				m_Raytracer.on_start(m_Raytracer.export_width, m_Raytracer.export_height);
+				// 3. Resize to export resolution (preserves shader + SSBOs).
+				// Force full accumulation for the export pass.
+				m_Raytracer.resize(m_Raytracer.export_width, m_Raytracer.export_height);
+				m_ExportSavedPreviewSamples = m_Raytracer.preview_samples;
+				m_Raytracer.accumulate = true;
+				m_Raytracer.preview_samples = m_Raytracer.export_samples;
 
 				// 4. TRIGGER THE EXPORT STATE (Do NOT run a for-loop here!)
 				m_IsExporting = true;
@@ -971,8 +1024,8 @@ namespace editor {
 				} else {
 					// WE ARE DONE!
 					m_Raytracer.export_to_png(m_ExportPath);
-					m_Raytracer.on_stop();
-					m_Raytracer.on_start(m_PreviewW, m_PreviewH);
+					m_Raytracer.resize(m_PreviewW, m_PreviewH);
+					m_Raytracer.preview_samples = m_ExportSavedPreviewSamples;
 					m_IsExporting = false;
 					ImGui::CloseCurrentPopup();
 					break; // Exit the chunk loop early if we finish

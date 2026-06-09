@@ -221,10 +221,16 @@ namespace me {
 
 			std::ofstream ofs(physical_path, std::ios::binary);
 			if (!ofs) {
-				std::cerr << "Failed to save scene to: " << physical_path << "\n";
+				me::logger::error("Failed to open scene file for writing: " + physical_path.string());
 				return false;
 			}
-			ofs << root.dump(4);
+			try {
+				ofs.exceptions(std::ios::failbit | std::ios::badbit);
+				ofs << root.dump(4);
+			} catch (const std::exception& ex) {
+				me::logger::error("Error writing scene file: " + std::string(ex.what()));
+				return false;
+			}
 			return true;
 		}
 
@@ -233,12 +239,17 @@ namespace me {
 
 			std::ifstream ifs(physical_path, std::ios::binary);
 			if (!ifs) {
-				std::cerr << "Failed to load scene from: " << physical_path << "\n";
+				me::logger::error("Failed to open scene file: " + physical_path.string());
 				return false;
 			}
 
 			json root;
-			try { ifs >> root; } catch (...) { return false; }
+			try {
+				ifs >> root;
+			} catch (const std::exception& ex) {
+				me::logger::error("Failed to parse scene JSON: " + std::string(ex.what()));
+				return false;
+			}
 
 			clear();
 
@@ -284,8 +295,14 @@ namespace me {
 
 					// Re-link Parent
 					uint32_t old_parent = j.value("parent", 0);
-					if (old_parent != 0 && old_to_new.count(old_parent)) {
-						tc.parent = old_to_new[old_parent];
+					if (old_parent != 0) {
+						if (old_to_new.count(old_parent)) {
+							tc.parent = old_to_new[old_parent];
+						} else {
+							me::logger::warn("Scene load: entity references unknown parent ID " +
+								std::to_string(old_parent) + " — hierarchy link dropped");
+							tc.parent = me::entity::null;
+						}
 					} else {
 						tc.parent = me::entity::null;
 					}
@@ -295,6 +312,9 @@ namespace me {
 						for (uint32_t old_child : j["children"]) {
 							if (old_to_new.count(old_child)) {
 								tc.children.push_back(old_to_new[old_child]);
+							} else {
+								me::logger::warn("Scene load: entity references unknown child ID " +
+									std::to_string(old_child) + " — link dropped");
 							}
 						}
 					}
