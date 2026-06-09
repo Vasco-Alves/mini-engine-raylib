@@ -15,7 +15,7 @@ namespace me::systems {
 		Vector3 listener_right = Vector3Normalize(Vector3CrossProduct(fallback_forward, fallback_up));
 
 		// 2. Check the ECS: Is there an active Game Camera overriding it?
-		me::entity::entity_id listener_id = 0xFFFFFFFF;
+		me::entity::entity_id listener_id = me::entity::null;
 		auto& listener_pool = registry.view<me::components::AudioListenerComponent>();
 
 		for (size_t i = 0; i < listener_pool.size(); ++i) {
@@ -25,7 +25,7 @@ namespace me::systems {
 			}
 		}
 
-		if (listener_id != 0xFFFFFFFF) {
+		if (listener_id != me::entity::null) {
 			auto* t = registry.try_get_component<me::components::TransformComponent>(listener_id);
 			auto* c = registry.try_get_component<me::components::CameraComponent>(listener_id);
 

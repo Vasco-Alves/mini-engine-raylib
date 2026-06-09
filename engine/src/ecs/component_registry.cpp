@@ -203,37 +203,6 @@ namespace me::ecs {
 					c.projection = j.value("projection", 0);
 				}));
 
-			// Camera2D
-			r.push_back(meta<Camera2DComponent>("Camera2D",
-				[](const Camera2DComponent& c) {
-					return json{
-						{"active", c.active},
-						{"offset_x", c.offset.x}, {"offset_y", c.offset.y},
-						{"rotation", c.rotation},
-						{"zoom", c.zoom}
-					};
-				},
-				[](Camera2DComponent& c, const json& j) {
-					c.active = j.value("active", true);
-					c.offset = { j.value("offset_x", 0.f), j.value("offset_y", 0.f) };
-					c.rotation = j.value("rotation", 0.f);
-					c.zoom = j.value("zoom", 1.0f);
-				}));
-
-			// Shape2D
-			r.push_back(meta<Shape2DComponent>("Shape2D",
-				[](const Shape2DComponent& c) {
-					json j; j["type"] = static_cast<int>(c.type);
-					write_color(j, c.color);
-					j["wireframe"] = c.wireframe;
-					return j;
-				},
-				[](Shape2DComponent& c, const json& j) {
-					c.type = static_cast<Shape2DComponent::Type>(j.value("type", 0));
-					c.color = read_color(j);
-					c.wireframe = j.value("wireframe", false);
-				}));
-
 			// RigidBody
 			r.push_back(meta<RigidBodyComponent>("RigidBody",
 				[](const RigidBodyComponent& c) {
@@ -323,25 +292,6 @@ namespace me::ecs {
 				},
 				[](Registry& reg, entity::entity_id e) {
 					if (auto* c = reg.try_get_component<BackgroundMusicComponent>(e)) me::audio::release(c->stream);
-				}));
-
-			// Sprite — previously never persisted. Registered here so 2D sprites
-			// round-trip and free their texture on delete. (Whether the engine draws
-			// them is a separate, still-open question; this only handles the data.)
-			r.push_back(meta<SpriteComponent>("Sprite",
-				[](const SpriteComponent& c) {
-					const char* path = me::assets::internal_get_texture_path(c.texture);
-					json j; j["path"] = path ? path : "";
-					write_color(j, c.tint, true);
-					return j;
-				},
-				[](SpriteComponent& c, const json& j) {
-					std::string path = j.value("path", "");
-					if (!path.empty()) c.texture = me::assets::load_texture(path.c_str());
-					c.tint = read_color(j, true);
-				},
-				[](Registry& reg, entity::entity_id e) {
-					if (auto* c = reg.try_get_component<SpriteComponent>(e)) me::assets::release(c->texture);
 				}));
 
 			return r;

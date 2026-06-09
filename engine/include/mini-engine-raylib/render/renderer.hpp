@@ -23,6 +23,4 @@ namespace me::render {
 	// If passed overrides, it renders from that perspective. If null, it automatically searches the ECS
 	void render_world(const me::components::TransformComponent* override_transform = nullptr, const me::components::CameraComponent* override_cam = nullptr);
 
-	void render_2d();
-
 } // namespace me::render

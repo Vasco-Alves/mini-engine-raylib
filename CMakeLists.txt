@@ -41,7 +41,12 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # Raylib
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
-add_definitions(-DGRAPHICS_API_OPENGL_43)
+# The GPU path tracer needs compute shaders + SSBOs, which require OpenGL 4.3. Use raylib's
+# own OPENGL_VERSION knob so it compiles the 4.3 code paths AND requests a 4.3 context at
+# window creation, and propagates GRAPHICS_API_OPENGL_43 (PUBLIC) to the engine/editor/imgui.
+# This replaces a global `add_definitions(-DGRAPHICS_API_OPENGL_43)` that fought raylib's own
+# 3.3 default (causing a macro-redefinition warning and a misleading "GRAPHICS=33" log line).
+set(OPENGL_VERSION "4.3" CACHE STRING "OpenGL version (4.3 required for compute shaders)" FORCE)
 add_subdirectory(vendor/raylib)
 
 # nlohmann_json
@@ -79,3 +84,9 @@ add_subdirectory(vendor/joltphysics/Build)
 # ==========================================
 add_subdirectory(engine)
 add_subdirectory(editor)
+
+# ==========================================
+# TESTS
+# ==========================================
+enable_testing()
+add_subdirectory(tests)

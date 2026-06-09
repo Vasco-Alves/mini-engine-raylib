@@ -12,7 +12,7 @@ namespace editor {
 		void on_imgui_render();
 
 		me::Entity get_selected_entity() const {
-			if (m_SelectionContext == 0xFFFFFFFF || m_Context == nullptr) {
+			if (m_SelectionContext == me::entity::null || m_Context == nullptr) {
 				return me::Entity(); // Returns an invalid entity
 			}
 			return me::Entity(m_SelectionContext, m_Context);
@@ -26,7 +26,7 @@ namespace editor {
 
 	private:
 		me::Registry* m_Context = nullptr;
-		me::entity::entity_id m_SelectionContext = 0xFFFFFFFF;
+		me::entity::entity_id m_SelectionContext = me::entity::null;
 	};
 
 }

@@ -432,11 +432,11 @@ namespace editor {
 
 			// 4. Escape to deselect
 			if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-				m_HierarchyPanel.set_selected_entity(0xFFFFFFFF);
+				m_HierarchyPanel.set_selected_entity(me::entity::null);
 			}
 
 			// 5. Delete selected entity
-			if (selected != 0xFFFFFFFF && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+			if (selected != me::entity::null && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
 				auto& reg = me::get_registry();
 				if (auto* t = reg.try_get_component<me::components::TransformComponent>(selected)) {
 					// Unlink from parent
@@ -451,11 +451,11 @@ namespace editor {
 					}
 				}
 				reg.destroy_entity(selected);
-				m_HierarchyPanel.set_selected_entity(0xFFFFFFFF);
+				m_HierarchyPanel.set_selected_entity(me::entity::null);
 			}
 
 			// 6. Duplicate entity (Ctrl + D)
-			if (selected != 0xFFFFFFFF && ctrl && ImGui::IsKeyPressed(ImGuiKey_D)) {
+			if (selected != me::entity::null && ctrl && ImGui::IsKeyPressed(ImGuiKey_D)) {
 				auto& reg = me::get_registry();
 
 				auto new_ent = reg.create_entity();
@@ -473,7 +473,7 @@ namespace editor {
 				m_HierarchyPanel.set_selected_entity(new_ent.get_id());
 			}
 
-			if (selected != 0xFFFFFFFF && ImGui::IsKeyPressed(ImGuiKey_F)) {
+			if (selected != me::entity::null && ImGui::IsKeyPressed(ImGuiKey_F)) {
 				auto* transform = me::get_registry().try_get_component<me::components::TransformComponent>(selected);
 				if (transform) {
 					m_OrbitTarget = { transform->position.x, transform->position.y, transform->position.z };
@@ -530,7 +530,7 @@ namespace editor {
 
 	void EditorApp::new_scene() {
 		me::scene_manager::clear();
-		m_HierarchyPanel.set_selected_entity(0xFFFFFFFF);
+		m_HierarchyPanel.set_selected_entity(me::entity::null);
 
 		// Create a Directional Light Source (The Sun)
 		auto sun = me::get_registry().create_entity();

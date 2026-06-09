@@ -12,7 +12,7 @@ namespace editor {
 
 	void SceneHierarchyPanel::set_context(me::Registry* context) {
 		m_Context = context;
-		m_SelectionContext = 0xFFFFFFFF;
+		m_SelectionContext = me::entity::null;
 	}
 
 	void SceneHierarchyPanel::on_imgui_render() {
@@ -35,7 +35,7 @@ namespace editor {
 
 		// Deselect if clicking in empty space
 		if (ImGui::IsMouseDown(0) && ImGui::IsWindowHovered()) {
-			m_SelectionContext = 0xFFFFFFFF;
+			m_SelectionContext = me::entity::null;
 		}
 
 		// Right-Click Empty Space -> Create Entity
@@ -212,7 +212,7 @@ namespace editor {
 				m_Context->destroy_entity(entity);
 
 				if (m_SelectionContext == entity) {
-					m_SelectionContext = 0xFFFFFFFF;
+					m_SelectionContext = me::entity::null;
 				}
 			}
 			ImGui::PopStyleColor();

@@ -191,7 +191,7 @@ namespace editor {
 					ray.direction = Vector3Normalize(Vector3Subtract({ wx / ww, wy / ww, wz / ww }, ray.position));
 
 					float closest_dist = FLT_MAX;
-					me::entity::entity_id hit_entity = 0xFFFFFFFF;
+					me::entity::entity_id hit_entity = me::entity::null;
 					auto& reg = me::get_registry();
 					auto view_pool = reg.view<me::components::TransformComponent>();
 

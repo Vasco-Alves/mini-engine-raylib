@@ -71,24 +71,6 @@ namespace me::components {
 		float mouse_sens = 0.5f;
 	};
 
-	struct Camera2DComponent {
-		Vector2 offset = { 0.0f, 0.0f };
-		float rotation = 0.0f;
-		float zoom = 1.0f;
-		bool active = true;
-	};
-
-	struct Shape2DComponent {
-		enum Type { Rectangle, Circle } type = Rectangle;
-		me::Color color = me::Color::white;
-		bool wireframe = false;
-	};
-
-	struct SpriteComponent {
-		me::assets::TextureId texture{};
-		me::Color tint = me::Color::white;
-	};
-
 	struct Shape3DComponent {
 		enum Type { Cube, Sphere, Plane } type = Cube;
 		me::Color color = me::Color::white;

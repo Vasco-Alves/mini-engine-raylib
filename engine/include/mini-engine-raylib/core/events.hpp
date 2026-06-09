@@ -39,7 +39,7 @@ namespace me {
 		// Editor UI Events
 		class EntitySelectedEvent : public Event {
 		public:
-			uint32_t entity_id; // 0xFFFFFFFF means deselect
+			uint32_t entity_id; // me::entity::null (0) means deselect
 			EntitySelectedEvent(uint32_t id) : entity_id(id) {}
 		};
 

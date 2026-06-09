@@ -134,7 +134,7 @@ namespace editor {
 						me::scene_manager::load(path.string());
 
 						// 2. Send Events
-						me::get_event_bus().publish<me::events::EntitySelectedEvent>(0xFFFFFFFF);
+						me::get_event_bus().publish<me::events::EntitySelectedEvent>(me::entity::null);
 
 					} else if (ext == ".glb" || ext == ".obj") {
 						std::string relative_vfs = "game://" + std::filesystem::relative(path, m_ProjectPath / "assets").string();

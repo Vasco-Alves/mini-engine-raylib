@@ -5,7 +5,7 @@
 //   * save -> load -> save produces identical JSON (serialize/deserialize is stable), and
 //   * key values and the parent/child links survive the round trip.
 //
-// Asset-backed components (Model/Sprite/AudioSource/BackgroundMusic) are included with
+// Asset-backed components (Model/AudioSource/BackgroundMusic) are included with
 // empty paths so their load path never touches the GPU/audio device.
 
 #include <mini-ecs/registry.hpp>
@@ -72,8 +72,6 @@ int main() {
 	parent.add_component(LightComponent{ me::Color{ 255, 128, 0, 255 }, 2.5f });
 	parent.add_component(DirectionalLightComponent{ me::Color{ 100, 110, 120, 255 }, 0.75f });
 	parent.add_component(CameraComponent{});
-	parent.add_component(Camera2DComponent{});
-	parent.add_component(Shape2DComponent{ Shape2DComponent::Circle, me::Color{ 1, 2, 3, 255 }, true });
 	parent.add_component(RigidBodyComponent{ RigidBodyType::Dynamic, 3.0f, 0.5f, 0.7f });
 	parent.add_component(BoxColliderComponent{ { 1.5f, 2.5f, 3.5f }, false });
 	parent.add_component(SphereColliderComponent{ 2.25f, false });
@@ -88,7 +86,6 @@ int main() {
 		b.volume = 0.6f; b.loop = false;
 		parent.add_component(b);
 	}
-	parent.add_component(SpriteComponent{});        // empty texture handle
 	{
 		ScriptComponent sc;
 		sc.scripts.push_back({ "scripts/test.lua" });
@@ -143,9 +140,6 @@ int main() {
 
 	auto* scr = reg2.try_get_component<ScriptComponent>(p);
 	CHECK(scr && scr->scripts.size() == 1 && scr->scripts[0].path == "scripts/test.lua");
-
-	auto* spr = reg2.try_get_component<SpriteComponent>(p);
-	CHECK(spr != nullptr); // Sprite now persists (previously it was dropped on save)
 
 	if (g_failures == 0) {
 		std::cout << "[scene_roundtrip] PASSED\n";

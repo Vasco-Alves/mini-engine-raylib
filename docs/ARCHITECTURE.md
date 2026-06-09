@@ -105,7 +105,7 @@ changed.
 ## Editor: selection, gizmos, and undo
 
 - **Selection** is broadcast via the `EventBus` (`EntitySelectedEvent`); the hierarchy panel
-  holds the current selection. `0xFFFFFFFF` is used as the "nothing selected" sentinel.
+  holds the current selection. `me::entity::null` (`0`) is the "nothing selected" sentinel.
 - **Gizmos** ([`viewport_panel.cpp`](../editor/src/panels/viewport_panel.cpp)) manipulate the
   world matrix via ImGuizmo, convert back to local space relative to the parent, and decompose
   into position/rotation/scale.
@@ -190,22 +190,22 @@ table.
 
 ## Recommended cleanups
 
-The architecture is sound; most friction comes from hand-maintained per-component lists.
-In rough priority:
+The structural items from the original review are all done (see below). Smaller polish that
+remains:
 
-1. **Centralize component registration.** *(Done.)*
-   [`component_registry.cpp`](../engine/src/ecs/component_registry.cpp) drives scene save/load,
-   entity duplication, and native-handle cleanup; the editor's `inspector_components()` table
-   drives the Inspector panels and the Add-Component menu. New components register once per side.
-2. **Finish or fence off the 2D path** (`render_2d`, sprites, `Shape2D`, `Camera2D`). Their data
-   now serializes via the registry; what's missing is the editor actually drawing them.
-3. **One sentinel for "no entity"** — replace literal `0xFFFFFFFF` with `me::entity::null`
-   semantics consistently.
+- **Build hygiene** — bump `cmake_minimum_required(VERSION 3.5)`, and replace the editor's
+  `file(GLOB_RECURSE)` source list with explicit files (GLOB won't re-run when files are added).
+- **C-runtime warnings** — `strncpy` / `localtime` (`C4996`) and a signed/unsigned compare
+  (`C4018`) in the editor.
+- **Robustness** — guard `update_transform_node` against a cyclic parent/child graph (a corrupt
+  scene could infinite-recurse); `EventBus` has no unsubscribe (fine while the editor is
+  process-lifetime, but `this`-capturing handlers would dangle if it were recreated).
 
-> Already addressed during the review: `me::audio::update()` is now pumped every frame
-> (background music streams); the inspector no longer leaves the ImGui tree stack unbalanced
-> when a component is removed while expanded; serialization/duplication/handle-cleanup are
-> unified behind the component registry; `SpriteComponent` now persists (it was silently
-> dropped on save before); and the per-frame simulation order is unified in `me::world_update`
-> (scripts → physics → transforms), fixing a one-frame physics lag and removing the editor's
-> separate physics-step path.
+> Done during the review: the component **registry** unified scene save/load, duplication and
+> native-handle cleanup, and the editor's `inspector_components()` table unified the Inspector
+> panels + Add-Component menu; `me::world_update` unified the per-frame order (scripts → physics
+> → transforms), fixing a one-frame physics lag; `me::audio::update()` is pumped every frame so
+> music streams; the inspector no longer unbalances the ImGui tree stack on component removal;
+> the GPU path tracer's OpenGL 4.3 setup uses raylib's `OPENGL_VERSION` knob (no more
+> macro-redefinition warning); the "no entity" sentinel is `me::entity::null` throughout (fixing
+> stray no-selection actions like Ctrl+D); and the unfinished 2D scaffolding was removed.
