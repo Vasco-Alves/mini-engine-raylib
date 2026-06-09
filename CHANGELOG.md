@@ -2,7 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
-# Untitled
+## [0.12.0] - 2026-06-09
+
+Huge code refactor and added support for raytracing and path tracing using the GPU from a shader.
+
+Now GPU raytracing is the default method
 
 ## [0.11.1] - 2026-06-08
 

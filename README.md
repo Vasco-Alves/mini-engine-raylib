@@ -1,19 +1,21 @@
-# MiniEngineRaylib
-
-**MiniEngineRaylib** is a cross-platform modular, 3D game engine and editor written in **C++23**.
+# Mini-Engine-Raylib
 
 Originally built as a lightweight wrapper over [Raylib](https://www.raylib.com/), the engine has evolved into a robust development environment. It features a custom Data-Oriented Entity-Component-System (ECS), a AAA physics backend, live Lua scripting, spatial audio, and a complete UI editor, making it an ideal platform for graphics research and rapid prototyping.
 
-## Core Features
+> Version 0.11.2 · C++23 · Windows (MSVC) and Linux (GCC)
 
-- **Robust Editor Architecture:** A fully dockable ImGui interface featuring a Scene Hierarchy, Entity Inspector, and interactive 3D ImGuizmo manipulation. Features standard QoL tools including **Drag-and-Drop** asset loading and a complete **Undo/Redo** Command history system.
-- **Advanced Camera Controls:** Smooth viewport navigation with Free-Fly (FPS style) and Object Orbit (Alt + Click) camera modes, backed by precise 3D mouse-picking/raycasting.
-- **Entity-Component-System (ECS):** A lightweight, contiguous-memory architecture that seamlessly syncs visual data, physics bounds, audio, and logic in real-time.
-- **GPU-Accelerated 3D Rendering:** A custom Blinn-Phong shader pipeline supporting multi-light architecture (Directional and Point lights) with physically based attenuation.
-- **Jolt Physics Backend:** Professional-grade 3D physics integration supporting Dynamic, Kinematic, and Static rigidbodies, alongside Box and Sphere colliders with real-time debug wireframes.
-- **3D Spatial Audio:** Integrated audio pipeline supporting background music streams and spatialized audio sources with distance falloff, pitch manipulation, and active listeners.
-- **Lua Scripting & Hot-Reloading:** Write gameplay logic in Lua using `Sol3`. The engine detects file changes and hot-reloads scripts instantly without recompiling the C++ core.
-- **Data-Oriented Scene Serialization:** Save and load complete scenes (including all components and script states) to JSON.
+![Editor](docs/images/editor_hero.png)
+
+## Features
+
+- **ECS core** — entities are plain data; systems iterate component pools([mini-ecs](vendor/mini-ecs)).
+- **Editor** — dockable ImGui UI with scene hierarchy, inspector, content browser, console, and a viewport with ImGuizmo move/rotate/scale gizmos and mouse picking.
+- **Scene serialization** — scenes are JSON; projects have their own asset folders.
+- **Lua scripting** — per-entity scripts with `start`/`update` callbacks and hot-reload ([sol3](vendor/sol3) + Lua).
+- **Physics** — rigid bodies and box/sphere colliders via [Jolt](vendor/joltphysics).
+- **Rendering** — forward renderer with a custom lighting shader (point + directional lights, basic PBR-ish material params), plus a CPU/GPU path tracer for offline-quality stills.
+- **Audio** — sound effects and streaming music with simple 3D spatialization.
+- **Undo/redo** — command-history stack wired through the inspector and gizmos.
 
 ## Getting Started
 
@@ -21,10 +23,8 @@ Originally built as a lightweight wrapper over [Raylib](https://www.raylib.com/)
 
 - **C++23** compatible compiler (MSVC, GCC or Clang)
 - **CMake 3.5+**
-- **Git**
-- **Visual Studio** (Highly Recommended)
 
-### 1. Cloning the Repository
+### Cloning the Repository
 
 This project uses Git submodules for core engine components. You **must** clone it recursively to fetch all the required source code.
 
@@ -35,33 +35,37 @@ cd mini-engine-raylib
 
 *(If you already cloned it normally, run `git submodule update --init --recursive` to pull the missing files).*
 
-### 2. Building the Engine (Visual Studio)
+### With CMake presets (recommended)
 
-The engine handles its dependencies internally via modern CMake, so no external package managers are required.
+```bash
+cmake --preset x64-debug        # or: x64-release, linux-debug
+cmake --build --preset x64-debug
+```
 
-1. Open **Visual Studio**.
-2. Select **"Open a local folder"** and select the cloned `mini-engine-raylib` directory.
-3. Allow CMake a few moments to automatically generate the cache.
-4. In the top toolbar, select `editor.exe` as your Startup Item.
-5. Select x64 Release. 
-6. Hit **Build and Run**. Asset files and default shaders are automatically copied to the output directory during the build process.
+Presets use the Ninja generator. The `editor` executable lands in
+`out/build/<preset>/bin/`, with `assets/` copied next to it automatically.
 
-## Architecture & Dependencies
+### Manual configure
 
-MiniEngineRaylib bridges a custom data-oriented core with robust industry standards to create a seamless development pipeline:
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
 
-### Submodules
+## Architecture
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the layering, the per-frame system
+order, the serialization model, and a checklist for adding a new component type.
+
+## Submodules
 
 - [**Mini-ECS**](https://github.com/Vasco-Alves/mini-ecs): A custom-built, lightweight Entity-Component-System engineered specifically for this engine to handle contiguous memory pools and fast component iteration.
-
-### External Libraries
 
 - [**Raylib**](https://github.com/raysan5/raylib): Core windowing, input processing, and rendering context.
 - [**Dear ImGui**](https://github.com/ocornut/imgui) & **ImGuizmo**: Powers the entire Editor UI (Inspector, Hierarchy, Viewports) via `rlImGui`.
 - [**Jolt Physics**](https://github.com/jrouwe/JoltPhysics): Multi-threaded AAA 3D collision and rigidbody simulation.
 - [**sol3**](https://github.com/ThePhD/sol2): A C++ bindings library that bridges the engine architecture to the Lua scripting environment.
 - [**Portable File Dialogs**](https://github.com/samhocevar/portable-file-dialogs): Opens native GUI file dialogs depending on the OS.
-- 
 
 ## Future Improvements & Thesis Roadmap
 
