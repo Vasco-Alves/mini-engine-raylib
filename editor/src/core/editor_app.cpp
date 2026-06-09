@@ -21,25 +21,12 @@
 #include <mini-engine-raylib/ecs/script_component.hpp>
 #include <mini-engine-raylib/ecs/audio_components.hpp>
 #include <mini-engine-raylib/ecs/physics_components.hpp>
+#include <mini-engine-raylib/ecs/component_registry.hpp>
 #include <mini-engine-raylib/systems/camera_system.hpp>
 #include <mini-engine-raylib/systems/physics_system.hpp>
 #include <mini-engine-raylib/systems/audio_system.hpp>
 
 namespace editor {
-
-	namespace {
-		// Copies each present value-type component from src to dst in one fold.
-		// Note: handle-owning components (Model3D, AudioSource, BackgroundMusic) copy
-		// their cache handle without bumping the refcount — matching the long-standing
-		// duplicate behavior; deep asset cloning is a separate concern.
-		template <typename... Components>
-		void clone_components(me::Registry& reg, me::entity::entity_id src, me::entity::entity_id dst) {
-			([&] {
-				if (auto* c = reg.try_get_component<Components>(src))
-					reg.add_component<Components>(dst, *c);
-			}(), ...);
-		}
-	}
 
 	void EditorApp::on_start() {
 		me::input::bind_digital_axis("MoveY", me::input::Key::Q, me::input::Key::E, 1.0f);
@@ -482,39 +469,17 @@ namespace editor {
 			if (selected != 0xFFFFFFFF && ctrl && ImGui::IsKeyPressed(ImGuiKey_D)) {
 				auto& reg = me::get_registry();
 
-				auto old_tag = reg.try_get_component<me::components::TagComponent>(selected);
-				std::string new_name = old_tag ? (old_tag->name + " (Clone)") : "Entity (Clone)";
-
 				auto new_ent = reg.create_entity();
-				new_ent.add_component<me::components::TagComponent>({ new_name });
 
-				// Copy every value-type component in one shot. Tag (renamed above) and
-				// Script (needs fresh per-instance runtime state) are handled separately.
-				clone_components<
-					me::components::TransformComponent,
-					me::components::Shape3DComponent,
-					me::components::Model3DComponent,
-					me::components::MaterialComponent,
-					me::components::LightComponent,
-					me::components::DirectionalLightComponent,
-					me::components::CameraComponent,
-					me::components::Camera2DComponent,
-					me::components::Shape2DComponent,
-					me::components::SpriteComponent,
-					me::components::RigidBodyComponent,
-					me::components::BoxColliderComponent,
-					me::components::SphereColliderComponent,
-					me::components::AudioListenerComponent,
-					me::components::AudioSourceComponent,
-					me::components::BackgroundMusicComponent
-				>(reg, selected, new_ent.get_id());
+				// The component registry copies every component (handle-owning ones and
+				// Scripts included, the latter cloned by path so it re-inits its own Lua state).
+				me::ecs::clone_entity(reg, selected, new_ent.get_id());
 
-				// Scripts clone by path only, so the copy re-initializes its own Lua state.
-				if (auto* sc = reg.try_get_component<me::components::ScriptComponent>(selected)) {
-					me::components::ScriptComponent new_sc;
-					for (const auto& script : sc->scripts) new_sc.scripts.push_back({ script.path });
-					new_ent.add_component<me::components::ScriptComponent>(new_sc);
-				}
+				// Cosmetic: mark the copy as a clone.
+				if (auto* tag = new_ent.try_get_component<me::components::TagComponent>())
+					tag->name += " (Clone)";
+				else
+					new_ent.add_component<me::components::TagComponent>({ "Entity (Clone)" });
 
 				m_HierarchyPanel.set_selected_entity(new_ent.get_id());
 			}

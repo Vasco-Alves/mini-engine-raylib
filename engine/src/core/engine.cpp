@@ -12,6 +12,7 @@
 
 #include "mini-engine-raylib/ecs/components.hpp"
 #include "mini-engine-raylib/ecs/audio_components.hpp"
+#include "mini-engine-raylib/ecs/component_registry.hpp"
 
 namespace me {
 
@@ -105,16 +106,8 @@ namespace me {
 			// 4. PROCESS ECS DEFERRED DELETIONS
 			// ==========================================
 			s_State.registry->process_deletions([&](me::entity::entity_id e) {
-				// Safely release native hardware handles before the entity is destroyed
-				if (auto* audio = s_State.registry->try_get_component<me::components::AudioSourceComponent>(e)) {
-					if (audio->clip.handle != 0) me::audio::release(audio->clip);
-				}
-				if (auto* bgm = s_State.registry->try_get_component<me::components::BackgroundMusicComponent>(e)) {
-					if (bgm->stream.handle != 0) me::audio::release(bgm->stream);
-				}
-				if (auto* model = s_State.registry->try_get_component<me::components::Model3DComponent>(e)) {
-					if (model->model.handle != 0) me::assets::release(model->model);
-				}
+				// Release native (GPU/audio) handles before the entity row is destroyed.
+				me::ecs::release_native_handles(*s_State.registry, e);
 				});
 		}
 

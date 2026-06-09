@@ -14,7 +14,8 @@ set(SOURCES
     "src/systems/transform_system.cpp"
     "src/core/vfs.cpp" 
     "src/core/logger.cpp"
-    "src/systems/physics_system.cpp" 
+    "src/systems/physics_system.cpp"
+    "src/ecs/component_registry.cpp"
   "src/systems/audio_system.cpp" "src/systems/raytracer_system.cpp" "src/render/raytracing_math.cpp")
 
 # 3. Create the Library
