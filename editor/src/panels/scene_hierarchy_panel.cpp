@@ -1,6 +1,10 @@
 #include "editor/panels/scene_hierarchy_panel.hpp"
+#include "editor/core/entity_commands.hpp"
+
 #include <imgui.h>
 #include <string>
+#include <cstring>
+#include <memory>
 #include <raylib.h>
 #include <raymath.h>
 #include <mini-engine-raylib/ecs/components.hpp>
@@ -13,9 +17,22 @@ namespace editor {
 	void SceneHierarchyPanel::set_context(me::Registry* context) {
 		m_Context = context;
 		m_SelectionContext = me::entity::null;
+		m_RenamingEntity = me::entity::null;
 	}
 
-	void SceneHierarchyPanel::on_imgui_render() {
+	void SceneHierarchyPanel::begin_rename(me::entity::entity_id entity) {
+		if (!m_Context || entity == me::entity::null || !m_Context->is_alive(entity)) return;
+
+		m_RenamingEntity = entity;
+		m_RenameFocusPending = true;
+
+		auto* tag = m_Context->try_get_component<me::components::TagComponent>(entity);
+		std::string current = (tag && !tag->name.empty()) ? tag->name : ("Entity " + std::to_string(entity));
+		strncpy(m_RenameBuffer, current.c_str(), sizeof(m_RenameBuffer) - 1);
+		m_RenameBuffer[sizeof(m_RenameBuffer) - 1] = '\0';
+	}
+
+	void SceneHierarchyPanel::on_imgui_render(editor::CommandHistory& command_history) {
 		if (!m_Context) return;
 
 		ImGui::Begin("Scene Hierarchy");
@@ -29,7 +46,7 @@ namespace editor {
 
 			// Only kick off the drawing chain if it's a top-level object
 			if (t.parent == me::entity::null) {
-				draw_entity_node(entity);
+				draw_entity_node(entity, command_history);
 			}
 		}
 
@@ -41,10 +58,10 @@ namespace editor {
 		// Right-Click Empty Space -> Create Entity
 		if (ImGui::BeginPopupContextWindow("HierarchyContext", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
 			if (ImGui::MenuItem("Create Empty Entity")) {
-				auto e = m_Context->create_entity();
-				e.add_component(me::components::TagComponent{ "New Entity" });
-				e.add_component(me::components::TransformComponent{ {0,0,0}, {0,0,0}, {1,1,1} });
-				m_SelectionContext = e.get_id(); // Auto-select new entity
+				auto cmd = std::make_unique<editor::CreateEntityCommand>(*m_Context, "New Entity");
+				auto* raw = cmd.get();
+				command_history.AddCommand(std::move(cmd));
+				m_SelectionContext = raw->created_id(); // Auto-select new entity
 			}
 			ImGui::EndPopup();
 		}
@@ -77,11 +94,51 @@ namespace editor {
 		ImGui::End();
 	}
 
-	void SceneHierarchyPanel::draw_entity_node(me::entity::entity_id entity) {
+	// Inline rename: replaces the entity's tree-node label with an InputText.
+	// Enter / clicking away commits (undoable); Escape cancels.
+	void SceneHierarchyPanel::draw_rename_field(me::entity::entity_id entity, editor::CommandHistory& command_history) {
+		ImGui::PushID((int)entity);
+		ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
+
+		if (m_RenameFocusPending) {
+			ImGui::SetKeyboardFocusHere();
+			m_RenameFocusPending = false;
+		}
+
+		bool entered = ImGui::InputText("##rename", m_RenameBuffer, sizeof(m_RenameBuffer), ImGuiInputTextFlags_EnterReturnsTrue);
+		bool done = entered || ImGui::IsItemDeactivated();
+
+		if (done) {
+			bool cancelled = ImGui::IsKeyPressed(ImGuiKey_Escape);
+			if (!cancelled && m_RenameBuffer[0] != '\0') {
+				auto* tag = m_Context->try_get_component<me::components::TagComponent>(entity);
+				me::components::TagComponent before = tag ? *tag : me::components::TagComponent{ "" };
+				me::components::TagComponent after{ std::string(m_RenameBuffer) };
+
+				if (!tag) m_Context->add_component<me::components::TagComponent>(entity, before);
+				if (after.name != before.name) {
+					command_history.AddCommand(std::make_unique<editor::ModifyComponentCommand<me::components::TagComponent>>(
+						me::Entity(entity, m_Context), before, after));
+				}
+			}
+			m_RenamingEntity = me::entity::null;
+		}
+
+		ImGui::PopItemWidth();
+		ImGui::PopID();
+	}
+
+	void SceneHierarchyPanel::draw_entity_node(me::entity::entity_id entity, editor::CommandHistory& command_history) {
 		if (!m_Context->is_alive(entity)) return;
 
 		auto* transform = m_Context->try_get_component<me::components::TransformComponent>(entity);
 		if (!transform) return;
+
+		// While renaming, the node row becomes a text field (children reappear after).
+		if (m_RenamingEntity == entity) {
+			draw_rename_field(entity, command_history);
+			return;
+		}
 
 		const char* display_name;
 		char buffer[64];
@@ -106,6 +163,11 @@ namespace editor {
 
 		if (ImGui::IsItemClicked()) {
 			m_SelectionContext = entity;
+		}
+
+		// Double-click the name -> rename in place
+		if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+			begin_rename(entity);
 		}
 
 		// ==========================================
@@ -170,16 +232,21 @@ namespace editor {
 		if (ImGui::BeginPopupContextItem()) {
 
 			if (ImGui::MenuItem("Create Empty Child")) {
-				auto e = m_Context->create_entity();
-				e.add_component(me::components::TagComponent{ "New Child Entity" });
+				auto cmd = std::make_unique<editor::CreateEntityCommand>(*m_Context, "New Child Entity", entity);
+				auto* raw = cmd.get();
+				command_history.AddCommand(std::move(cmd));
+				m_SelectionContext = raw->created_id();
+			}
 
-				me::components::TransformComponent tc;
-				tc.parent = entity;
-				tc.position = { 0,0,0 };
-				e.add_component(tc);
+			if (ImGui::MenuItem("Rename", "F2")) {
+				begin_rename(entity);
+			}
 
-				transform->add_child(e.get_id());
-				m_SelectionContext = e.get_id();
+			if (ImGui::MenuItem("Duplicate", "Ctrl+D")) {
+				auto cmd = std::make_unique<editor::DuplicateEntityCommand>(*m_Context, entity);
+				auto* raw = cmd.get();
+				command_history.AddCommand(std::move(cmd));
+				m_SelectionContext = raw->clone_id();
 			}
 
 			// Unparent Option
@@ -201,15 +268,10 @@ namespace editor {
 			ImGui::Separator();
 
 			ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.2f, 0.2f, 1.0f));
-			if (ImGui::MenuItem("Delete Entity")) {
-
-				// Unlink from parent before dying
-				if (transform->parent != me::entity::null) {
-					auto* old_parent = m_Context->try_get_component<me::components::TransformComponent>(transform->parent);
-					if (old_parent) old_parent->remove_child(entity);
-				}
-
-				m_Context->destroy_entity(entity);
+			if (ImGui::MenuItem("Delete Entity", "Del")) {
+				// Undoable: snapshots the whole entity (components + hierarchy).
+				// Children are orphaned to root, exactly like the Delete key.
+				command_history.AddCommand(std::make_unique<editor::DeleteEntityCommand>(*m_Context, entity));
 
 				if (m_SelectionContext == entity) {
 					m_SelectionContext = me::entity::null;
@@ -226,7 +288,7 @@ namespace editor {
 			// Copy the vector so iterator doesn't crash if an item is deleted while looping
 			auto children_copy = transform->children;
 			for (auto child_id : children_copy) {
-				draw_entity_node(child_id);
+				draw_entity_node(child_id, command_history);
 			}
 			ImGui::TreePop();
 		}

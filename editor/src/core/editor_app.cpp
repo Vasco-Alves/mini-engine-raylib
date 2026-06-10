@@ -1,4 +1,5 @@
 #include "editor/core/editor_app.hpp"
+#include "editor/core/entity_commands.hpp"
 
 #include <imgui.h>
 #include <rlImGui.h>
@@ -54,8 +55,10 @@ namespace editor {
 		me::render::init();
 		me::physics::init();
 
-		// Reset GPU accumulation whenever a scene property is edited, undone, or redone.
+		// Any edit, undo or redo marks the scene dirty (window-title "*") and, in
+		// Render mode, restarts the raytracer accumulation.
 		m_CommandHistory.on_scene_changed = [this]() {
+			m_SceneDirty = true;
 			if (m_SceneState == SceneState::Render) {
 				m_Raytracer.reset_accumulation(&me::get_registry());
 			}
@@ -123,6 +126,13 @@ namespace editor {
 		}
 
 		if (m_IsFlying) {
+			// Scroll while flying tunes the base fly speed (Shift/Ctrl in the
+			// camera system give a temporary sprint/precision modifier on top).
+			float wheel = GetMouseWheelMove();
+			if (wheel != 0.0f) {
+				m_EditorCamera.move_speed = std::clamp(m_EditorCamera.move_speed * (1.0f + 0.15f * wheel), 0.5f, 100.0f);
+			}
+
 			bool orbiting = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
 			if (orbiting)
 				me::camera::orbit_editor_camera(m_EditorCameraTransform, m_EditorCamera, m_OrbitTarget, dt);
@@ -145,6 +155,7 @@ namespace editor {
 		}
 
 		poll_shortcuts();
+		update_window_title();
 
 		// ==========================================
 		// 3D AUDIO SPATIAL UPDATE
@@ -283,7 +294,7 @@ namespace editor {
 		draw_toolbar();
 
 		// --- Draw Panels ---
-		m_HierarchyPanel.on_imgui_render();
+		m_HierarchyPanel.on_imgui_render(m_CommandHistory);
 		me::Entity selected_entity = m_HierarchyPanel.get_selected_entity();
 
 		// Keep orbit target in sync with whatever is selected
@@ -438,14 +449,18 @@ namespace editor {
 
 	void EditorApp::poll_shortcuts() {
 		bool ctrl = ImGui::GetIO().KeyCtrl;
+		bool shift = ImGui::GetIO().KeyShift;
 		bool wantText = ImGui::GetIO().WantTextInput;
 		me::entity::entity_id selected = m_HierarchyPanel.get_selected_entity();
 
-		// Global shortcuts — always fire (unless typing in a text box)
-		if (!wantText) {
+		// Global shortcuts — always fire (unless typing in a text box or flying,
+		// where Ctrl/Shift are the camera speed modifiers and S flies backward).
+		if (!wantText && !m_IsFlying) {
 
-			// Save Scene (Ctrl + S)
-			if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
+			// Save Scene (Ctrl + S) / Save Scene As (Ctrl + Shift + S)
+			if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_S)) {
+				open_save_as_modal();
+			} else if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S)) {
 				save_scene();
 				me::logger::info("Saved scene in " + m_CurrentScenePath);
 			}
@@ -465,13 +480,12 @@ namespace editor {
 					on_stop();
 			}
 
-			// Undo (Ctrl + Z)
-			if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_Z)) {
-				m_CommandHistory.Undo();
+			// Undo (Ctrl + Z) / Redo (Ctrl + Shift + Z or Ctrl + Y)
+			if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) {
+				if (shift) m_CommandHistory.Redo();
+				else       m_CommandHistory.Undo();
 			}
-
-			// Redo (Ctrl + Y)
-			if (IsKeyDown(KEY_LEFT_CONTROL) && IsKeyPressed(KEY_Y)) {
+			if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y)) {
 				m_CommandHistory.Redo();
 			}
 		}
@@ -484,42 +498,19 @@ namespace editor {
 				m_HierarchyPanel.set_selected_entity(me::entity::null);
 			}
 
-			// 5. Delete selected entity
+			// 5. Delete selected entity (undoable)
 			if (selected != me::entity::null && ImGui::IsKeyPressed(ImGuiKey_Delete)) {
-				auto& reg = me::get_registry();
-				if (auto* t = reg.try_get_component<me::components::TransformComponent>(selected)) {
-					// Unlink from parent
-					if (t->parent != me::entity::null) {
-						if (auto* p = reg.try_get_component<me::components::TransformComponent>(t->parent))
-							p->remove_child(selected);
-					}
-					// Orphan all children so they become root entities
-					for (auto child_id : t->children) {
-						if (auto* ct = reg.try_get_component<me::components::TransformComponent>(child_id))
-							ct->parent = me::entity::null;
-					}
-				}
-				reg.destroy_entity(selected);
-				m_HierarchyPanel.set_selected_entity(me::entity::null);
+				delete_selected_entity();
 			}
 
-			// 6. Duplicate entity (Ctrl + D)
+			// 6. Duplicate entity (Ctrl + D, undoable)
 			if (selected != me::entity::null && ctrl && ImGui::IsKeyPressed(ImGuiKey_D)) {
-				auto& reg = me::get_registry();
+				duplicate_selected_entity();
+			}
 
-				auto new_ent = reg.create_entity();
-
-				// The component registry copies every component (handle-owning ones and
-				// Scripts included, the latter cloned by path so it re-inits its own Lua state).
-				me::ecs::clone_entity(reg, selected, new_ent.get_id());
-
-				// Cosmetic: mark the copy as a clone.
-				if (auto* tag = new_ent.try_get_component<me::components::TagComponent>())
-					tag->name += " (Clone)";
-				else
-					new_ent.add_component<me::components::TagComponent>({ "Entity (Clone)" });
-
-				m_HierarchyPanel.set_selected_entity(new_ent.get_id());
+			// 7. Rename selected entity (F2)
+			if (selected != me::entity::null && ImGui::IsKeyPressed(ImGuiKey_F2)) {
+				m_HierarchyPanel.begin_rename(selected);
 			}
 
 			if (selected != me::entity::null && ImGui::IsKeyPressed(ImGuiKey_F)) {
@@ -538,7 +529,8 @@ namespace editor {
 
 		// Viewport-focused shortcuts
 		//if (m_ViewportPanel.is_focused() && !m_IsFlying && !wantText) {
-		if (!m_IsFlying && !wantText) {
+		// (!ctrl keeps Ctrl+S / Ctrl+Shift+S from also switching the gizmo)
+		if (!m_IsFlying && !wantText && !ctrl) {
 
 			// 8. Gizmo tool switching (Q / W / R / S)
 			if (ImGui::IsKeyPressed(ImGuiKey_Q)) m_GizmoType = -1;
@@ -546,6 +538,25 @@ namespace editor {
 			if (ImGui::IsKeyPressed(ImGuiKey_R)) m_GizmoType = ImGuizmo::ROTATE;
 			if (ImGui::IsKeyPressed(ImGuiKey_S)) m_GizmoType = ImGuizmo::SCALE;
 		}
+	}
+
+	// Both helpers route through the command history, so the operations are
+	// undoable and shared by the shortcuts and the Edit menu.
+	void EditorApp::delete_selected_entity() {
+		auto selected = m_HierarchyPanel.get_selected_entity().get_id();
+		if (selected == me::entity::null) return;
+		m_CommandHistory.AddCommand(std::make_unique<editor::DeleteEntityCommand>(me::get_registry(), selected));
+		m_HierarchyPanel.set_selected_entity(me::entity::null);
+	}
+
+	void EditorApp::duplicate_selected_entity() {
+		auto selected = m_HierarchyPanel.get_selected_entity().get_id();
+		if (selected == me::entity::null) return;
+		auto cmd = std::make_unique<editor::DuplicateEntityCommand>(me::get_registry(), selected);
+		auto* raw = cmd.get();
+		m_CommandHistory.AddCommand(std::move(cmd));
+		if (raw->clone_id() != me::entity::null)
+			m_HierarchyPanel.set_selected_entity(raw->clone_id());
 	}
 
 	// ====================================================================
@@ -575,11 +586,17 @@ namespace editor {
 
 		if (me::fs::exists("game://scenes/main.json")) me::scene_manager::load("game://scenes/main.json");
 		else { new_scene(); save_scene(); }
+
+		m_CommandHistory.Clear();
+		m_SceneDirty = false;
 	}
 
 	void EditorApp::new_scene() {
 		me::scene_manager::clear();
 		m_HierarchyPanel.set_selected_entity(me::entity::null);
+		// The history references entities from the old scene — they're gone now.
+		m_CommandHistory.Clear();
+		m_SceneDirty = true; // unsaved until the first Ctrl+S
 
 		// Create a Directional Light Source (The Sun)
 		auto sun = me::get_registry().create_entity();
@@ -618,7 +635,36 @@ namespace editor {
 		//}
 	}
 
-	void EditorApp::save_scene() const { me::scene_manager::save(m_CurrentScenePath); }
+	void EditorApp::save_scene() {
+		me::scene_manager::save(m_CurrentScenePath);
+		m_SceneDirty = false;
+	}
+
+	void EditorApp::open_save_as_modal() {
+		m_ShowSaveAsModal = true;
+		// Seed the name field with the current scene's filename (minus extension).
+		std::string name = m_CurrentScenePath;
+		if (auto pos = name.find_last_of('/'); pos != std::string::npos) name = name.substr(pos + 1);
+		if (auto pos = name.rfind(".json"); pos != std::string::npos) name = name.substr(0, pos);
+		if (name.empty()) name = "my_new_scene";
+		strncpy(m_NewSceneInput, name.c_str(), sizeof(m_NewSceneInput) - 1);
+		m_NewSceneInput[sizeof(m_NewSceneInput) - 1] = '\0';
+	}
+
+	// Shows "<scene>[*]" in the OS window title; the star marks unsaved changes.
+	void EditorApp::update_window_title() {
+		std::string title = "mini-engine-raylib";
+		if (m_IsProjectLoaded && !m_CurrentScenePath.empty()) {
+			std::string scene = m_CurrentScenePath;
+			if (auto pos = scene.find_last_of('/'); pos != std::string::npos) scene = scene.substr(pos + 1);
+			title += " - " + scene;
+			if (m_SceneDirty) title += " *";
+		}
+		if (title != m_LastWindowTitle) {
+			SetWindowTitle(title.c_str());
+			m_LastWindowTitle = title;
+		}
+	}
 
 	void EditorApp::on_play() {
 		m_SceneState = SceneState::Play;
@@ -660,6 +706,10 @@ namespace editor {
 
 		me::scene_manager::load("game://scenes/.temp_play.json");
 		me::fs::remove("game://scenes/.temp_play.json");
+
+		// Reloading the scene re-creates every entity under new ids, so the
+		// pre-play history would act on dead entities — drop it.
+		m_CommandHistory.Clear();
 	}
 
 	void EditorApp::load_engine_config() {
@@ -703,13 +753,25 @@ namespace editor {
 
 			// --- File Menu ---
 			if (ImGui::BeginMenu("File")) {
-				if (ImGui::MenuItem("New Scene")) {
+				if (ImGui::MenuItem("New Scene", "Ctrl+N")) {
 					m_ShowNewSceneModal = true;
 					strncpy(m_NewSceneInput, "my_new_scene", sizeof(m_NewSceneInput));
 				}
-				if (ImGui::MenuItem("Save Scene")) save_scene();
+				if (ImGui::MenuItem("Save Scene", "Ctrl+S")) save_scene();
+				if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S")) open_save_as_modal();
 				ImGui::Separator();
 				if (ImGui::MenuItem("Exit")) me::close_application();
+				ImGui::EndMenu();
+			}
+
+			// --- Edit Menu ---
+			if (ImGui::BeginMenu("Edit")) {
+				if (ImGui::MenuItem("Undo", "Ctrl+Z", false, m_CommandHistory.CanUndo())) m_CommandHistory.Undo();
+				if (ImGui::MenuItem("Redo", "Ctrl+Y", false, m_CommandHistory.CanRedo())) m_CommandHistory.Redo();
+				ImGui::Separator();
+				bool has_selection = m_HierarchyPanel.get_selected_entity().is_valid();
+				if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, has_selection)) duplicate_selected_entity();
+				if (ImGui::MenuItem("Delete", "Del", false, has_selection)) delete_selected_entity();
 				ImGui::EndMenu();
 			}
 
@@ -919,6 +981,29 @@ namespace editor {
 			}
 			ImGui::SameLine();
 			if (ImGui::Button("Cancel", ImVec2(120, 0))) { m_ShowNewSceneModal = false; ImGui::CloseCurrentPopup(); }
+			ImGui::EndPopup();
+		}
+
+		// ==========================================
+		// SAVE SCENE AS MODAL
+		// ==========================================
+		if (m_ShowSaveAsModal) ImGui::OpenPopup("Save Scene As");
+		if (ImGui::BeginPopupModal("Save Scene As", &m_ShowSaveAsModal, ImGuiWindowFlags_AlwaysAutoResize)) {
+			ImGui::Text("Enter scene name:");
+			ImGui::InputText("##SaveAsName", m_NewSceneInput, sizeof(m_NewSceneInput));
+			ImGui::Dummy(ImVec2(0, 10));
+
+			if (ImGui::Button("Save", ImVec2(120, 0))) {
+				std::string filename = std::string(m_NewSceneInput);
+				if (filename.find(".json") == std::string::npos) filename += ".json";
+				m_CurrentScenePath = "game://scenes/" + filename;
+				save_scene();
+				me::logger::info("Saved scene as " + m_CurrentScenePath);
+				m_ShowSaveAsModal = false;
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel", ImVec2(120, 0))) { m_ShowSaveAsModal = false; ImGui::CloseCurrentPopup(); }
 			ImGui::EndPopup();
 		}
 

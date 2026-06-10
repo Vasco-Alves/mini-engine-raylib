@@ -46,6 +46,11 @@ namespace editor {
 		void draw_toolbar();
 		void draw_modals();
 		void apply_theme();
+		void update_window_title();
+
+		// --- Entity Operations (undoable, shared by shortcuts and the Edit menu) ---
+		void delete_selected_entity();
+		void duplicate_selected_entity();
 
 		// --- Project Management ---
 		void create_project(const std::filesystem::path& path);
@@ -56,7 +61,8 @@ namespace editor {
 
 		// --- Scene Management ---
 		void new_scene();
-		void save_scene() const;
+		void save_scene();
+		void open_save_as_modal();
 		void on_play();
 		void on_stop();
 
@@ -73,6 +79,11 @@ namespace editor {
 
 		// --- Modals ---
 		bool m_ShowNewSceneModal = false;
+		bool m_ShowSaveAsModal = false;
+
+		// --- Unsaved-changes marker (window title "*") ---
+		bool m_SceneDirty = false;
+		std::string m_LastWindowTitle;
 
 		// --- Export State Tracking ---
 		bool m_ShowExportModal = false;

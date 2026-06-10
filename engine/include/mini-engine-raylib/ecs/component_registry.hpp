@@ -24,12 +24,17 @@ namespace me::ecs {
 		std::function<void(Registry&, entity::entity_id, const json&)> load;          // json -> add component
 		std::function<void(Registry&, entity::entity_id, entity::entity_id)> clone;   // (reg, src, dst)
 		std::function<void(Registry&, entity::entity_id)> on_destroy;                 // empty if no native handle
+		std::function<void(Registry&, entity::entity_id)> remove;                     // release handle (if any) + remove component
 	};
 
 	// The single source of truth: every component the engine can persist, in a
 	// stable order. To support a new component, add one entry in component_registry.cpp
 	// and serialization, duplication and handle cleanup all pick it up.
 	const std::vector<ComponentMeta>& components();
+
+	// Looks up a meta by its scene-JSON name ("Material", "MeshRenderer", ...).
+	// Returns nullptr when the name is unknown.
+	const ComponentMeta* find(const std::string& name);
 
 	// Copy every registered component present on `src` onto `dst`.
 	void clone_entity(Registry& reg, entity::entity_id src, entity::entity_id dst);

@@ -52,7 +52,14 @@ namespace me::ecs {
 			m.clone = [](Registry& r, entity::entity_id s, entity::entity_id d) {
 				if (auto* c = r.try_get_component<T>(s)) r.add_component<T>(d, *c);
 			};
-			m.on_destroy = std::move(on_destroy);
+			m.on_destroy = on_destroy;
+			// Removing a component releases its native handle (if it owns one)
+			// exactly like entity destruction does.
+			m.remove = [on_destroy](Registry& r, entity::entity_id e) {
+				if (!r.has_component<T>(e)) return;
+				if (on_destroy) on_destroy(r, e);
+				r.remove_component<T>(e);
+			};
 			return m;
 		}
 
@@ -162,6 +169,9 @@ namespace me::ecs {
 						for (const auto& inst : sc->scripts) fresh.scripts.push_back({ inst.path });
 						reg.add_component<ScriptComponent>(d, fresh);
 					}
+				};
+				m.remove = [](Registry& reg, entity::entity_id e) {
+					if (reg.has_component<ScriptComponent>(e)) reg.remove_component<ScriptComponent>(e);
 				};
 				r.push_back(std::move(m));
 			}
@@ -306,6 +316,13 @@ namespace me::ecs {
 	const std::vector<ComponentMeta>& components() {
 		static const std::vector<ComponentMeta> s_components = build_registry();
 		return s_components;
+	}
+
+	const ComponentMeta* find(const std::string& name) {
+		for (const auto& m : components()) {
+			if (m.name == name) return &m;
+		}
+		return nullptr;
 	}
 
 	void clone_entity(Registry& reg, entity::entity_id src, entity::entity_id dst) {

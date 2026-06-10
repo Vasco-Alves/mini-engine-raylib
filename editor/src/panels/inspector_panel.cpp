@@ -1,5 +1,7 @@
 #include "editor/panels/inspector_panel.hpp"
+#include "editor/core/entity_commands.hpp"
 
+#include <mini-engine-raylib/core/engine.hpp>
 #include <mini-engine-raylib/ecs/components.hpp>
 #include <mini-engine-raylib/ecs/physics_components.hpp>
 #include <mini-engine-raylib/ecs/audio_components.hpp>
@@ -72,6 +74,20 @@ namespace editor {
 			bool m_Remove = false;
 		};
 
+		// Drag-widget speed: hold Alt for 10x finer control. (ImGui also supports
+		// Ctrl+Click on any drag/slider to type an exact value.)
+		inline float fine(float v_speed) {
+			return ImGui::GetIO().KeyAlt ? v_speed * 0.1f : v_speed;
+		}
+
+		// Removes a component through the undo history. The command snapshots the
+		// component (asset paths included), so Ctrl+Z restores it intact, and the
+		// registry releases any native handle the component owns.
+		void remove_via_history(me::Entity entity, const char* meta_name, editor::CommandHistory& history) {
+			history.AddCommand(std::make_unique<editor::RemoveComponentCommand>(
+				me::get_registry(), entity.get_id(), meta_name));
+		}
+
 		// Records an Undo command when an edit on the preceding widget completes.
 		// Call immediately after the widget. One shared snapshot per component type
 		// is sufficient: only a single widget can be active at any moment.
@@ -115,13 +131,13 @@ namespace editor {
 
 			// Transform has no remove button, so it keeps its own (always-balanced) tree node.
 			if (ImGui::TreeNodeEx("Transform", s_TreeNodeFlags)) {
-				ImGui::DragFloat3("Position", &transform->position.x, 0.1f);
+				ImGui::DragFloat3("Position", &transform->position.x, fine(0.1f));
 				track_edit(entity, transform, command_history);
 
-				ImGui::DragFloat3("Rotation", &transform->rotation.x, 1.0f);
+				ImGui::DragFloat3("Rotation", &transform->rotation.x, fine(1.0f));
 				track_edit(entity, transform, command_history);
 
-				ImGui::DragFloat3("Scale", &transform->scale.x, 0.1f);
+				ImGui::DragFloat3("Scale", &transform->scale.x, fine(0.1f));
 				track_edit(entity, transform, command_history);
 
 				ImGui::TreePop();
@@ -133,7 +149,7 @@ namespace editor {
 			if (!shape) return;
 
 			ComponentSection section("Shape3D", "Shape 3D");
-			if (section.remove_clicked()) { entity.remove_component<me::components::Shape3DComponent>(); return; }
+			if (section.remove_clicked()) { remove_via_history(entity, "MeshRenderer", command_history); return; }
 			if (!section.body_visible()) return;
 
 			const char* types[] = { "Cube", "Sphere", "Plane" };
@@ -157,7 +173,7 @@ namespace editor {
 			if (!mat) return;
 
 			ComponentSection section("Material", "Material");
-			if (section.remove_clicked()) { entity.remove_component<me::components::MaterialComponent>(); return; }
+			if (section.remove_clicked()) { remove_via_history(entity, "Material", command_history); return; }
 			if (!section.body_visible()) return;
 
 			float color[4];
@@ -171,13 +187,13 @@ namespace editor {
 			ImGui::SliderFloat("Metallic", &mat->metallic, 0.0f, 1.0f);
 			track_edit(entity, mat, command_history);
 
-			ImGui::DragFloat("Emission Power", &mat->emission_power, 0.1f, 0.0f, 100.0f);
+			ImGui::DragFloat("Emission Power", &mat->emission_power, fine(0.1f), 0.0f, 100.0f);
 			track_edit(entity, mat, command_history);
 
 			ImGui::SliderFloat("Transmission (Glass)", &mat->transmission, 0.0f, 1.0f);
 			track_edit(entity, mat, command_history);
 
-			ImGui::DragFloat("IOR", &mat->ior, 0.01f, 1.0f, 3.0f, "%.2f");
+			ImGui::DragFloat("IOR", &mat->ior, fine(0.01f), 1.0f, 3.0f, "%.2f");
 			track_edit(entity, mat, command_history);
 
 			// How strongly the glass interior absorbs toward the albedo:
@@ -191,11 +207,7 @@ namespace editor {
 			if (!modelComp) return;
 
 			ComponentSection section("Model3D", "Model 3D");
-			if (section.remove_clicked()) {
-				if (modelComp->model.handle != 0) me::assets::release(modelComp->model);
-				entity.remove_component<me::components::Model3DComponent>();
-				return;
-			}
+			if (section.remove_clicked()) { remove_via_history(entity, "Model", command_history); return; }
 			if (!section.body_visible()) return;
 
 			ImGui::Text("Mesh");
@@ -223,7 +235,7 @@ namespace editor {
 			if (!light) return;
 
 			ComponentSection section("Light", "Light");
-			if (section.remove_clicked()) { entity.remove_component<me::components::LightComponent>(); return; }
+			if (section.remove_clicked()) { remove_via_history(entity, "Light", command_history); return; }
 			if (!section.body_visible()) return;
 
 			float color[4];
@@ -231,10 +243,10 @@ namespace editor {
 			if (ImGui::ColorEdit3("Color", color)) light->color = color_from_floats(color);
 			track_edit(entity, light, command_history);
 
-			ImGui::DragFloat("Intensity", &light->intensity, 0.1f, 0.0f, 100.0f);
+			ImGui::DragFloat("Intensity", &light->intensity, fine(0.1f), 0.0f, 100.0f);
 			track_edit(entity, light, command_history);
 
-			ImGui::DragFloat("Radius (Softness)", &light->radius, 0.01f, 0.0f, 20.0f);
+			ImGui::DragFloat("Radius (Softness)", &light->radius, fine(0.01f), 0.0f, 20.0f);
 			track_edit(entity, light, command_history);
 		}
 
@@ -243,7 +255,7 @@ namespace editor {
 			if (!light) return;
 
 			ComponentSection section("DirLight", "Directional Light");
-			if (section.remove_clicked()) { entity.remove_component<me::components::DirectionalLightComponent>(); return; }
+			if (section.remove_clicked()) { remove_via_history(entity, "DirectionalLight", command_history); return; }
 			if (!section.body_visible()) return;
 
 			float color[4];
@@ -251,10 +263,10 @@ namespace editor {
 			if (ImGui::ColorEdit3("Color", color)) light->color = color_from_floats(color);
 			track_edit(entity, light, command_history);
 
-			ImGui::DragFloat("Intensity", &light->intensity, 0.1f, 0.0f, 100.0f);
+			ImGui::DragFloat("Intensity", &light->intensity, fine(0.1f), 0.0f, 100.0f);
 			track_edit(entity, light, command_history);
 
-			ImGui::DragFloat("Angular Radius (deg)", &light->angular_radius, 0.05f, 0.0f, 30.0f);
+			ImGui::DragFloat("Angular Radius (deg)", &light->angular_radius, fine(0.05f), 0.0f, 30.0f);
 			track_edit(entity, light, command_history);
 		}
 
@@ -263,7 +275,7 @@ namespace editor {
 			if (!cam) return;
 
 			ComponentSection section("Camera", "Camera");
-			if (section.remove_clicked()) { entity.remove_component<me::components::CameraComponent>(); return; }
+			if (section.remove_clicked()) { remove_via_history(entity, "Camera", command_history); return; }
 			if (!section.body_visible()) return;
 
 			ImGui::Checkbox("Active (primary)", &cam->active);
@@ -274,13 +286,13 @@ namespace editor {
 			if (ImGui::Combo("Projection", &proj, projections, 2)) cam->projection = proj;
 			track_edit(entity, cam, command_history);
 
-			ImGui::DragFloat("Field of View", &cam->fov, 0.5f, 1.0f, 179.0f);
+			ImGui::DragFloat("Field of View", &cam->fov, fine(0.5f), 1.0f, 179.0f);
 			track_edit(entity, cam, command_history);
 
-			ImGui::DragFloat3("Look-at Target", &cam->target.x, 0.1f);
+			ImGui::DragFloat3("Look-at Target", &cam->target.x, fine(0.1f));
 			track_edit(entity, cam, command_history);
 
-			ImGui::DragFloat3("Up", &cam->up.x, 0.05f);
+			ImGui::DragFloat3("Up", &cam->up.x, fine(0.05f));
 			track_edit(entity, cam, command_history);
 		}
 
@@ -289,7 +301,7 @@ namespace editor {
 			if (!rb) return;
 
 			ComponentSection section("RigidBody", "Rigid Body");
-			if (section.remove_clicked()) { entity.remove_component<me::components::RigidBodyComponent>(); return; }
+			if (section.remove_clicked()) { remove_via_history(entity, "RigidBody", command_history); return; }
 			if (!section.body_visible()) return;
 
 			const char* body_types[] = { "Static", "Dynamic", "Kinematic" };
@@ -300,14 +312,14 @@ namespace editor {
 			track_edit(entity, rb, command_history);
 
 			if (rb->type == me::components::RigidBodyType::Dynamic) {
-				ImGui::DragFloat("Mass", &rb->mass, 0.1f, 0.001f, 1000.0f);
+				ImGui::DragFloat("Mass", &rb->mass, fine(0.1f), 0.001f, 1000.0f);
 				track_edit(entity, rb, command_history);
 			}
 
-			ImGui::DragFloat("Bounciness", &rb->bounciness, 0.05f, 0.0f, 1.0f);
+			ImGui::DragFloat("Bounciness", &rb->bounciness, fine(0.05f), 0.0f, 1.0f);
 			track_edit(entity, rb, command_history);
 
-			ImGui::DragFloat("Friction", &rb->friction, 0.05f, 0.0f, 10.0f);
+			ImGui::DragFloat("Friction", &rb->friction, fine(0.05f), 0.0f, 10.0f);
 			track_edit(entity, rb, command_history);
 		}
 
@@ -316,10 +328,10 @@ namespace editor {
 			if (!col) return;
 
 			ComponentSection section("BoxCollider", "Box Collider");
-			if (section.remove_clicked()) { entity.remove_component<me::components::BoxColliderComponent>(); return; }
+			if (section.remove_clicked()) { remove_via_history(entity, "BoxCollider", command_history); return; }
 			if (!section.body_visible()) return;
 
-			ImGui::DragFloat3("Half Extents", &col->half_extents.x, 0.1f, 0.01f, 100.0f);
+			ImGui::DragFloat3("Half Extents", &col->half_extents.x, fine(0.1f), 0.01f, 100.0f);
 			track_edit(entity, col, command_history);
 
 			ImGui::Checkbox("Show Debug Wireframe", &col->show_debug);
@@ -331,10 +343,10 @@ namespace editor {
 			if (!col) return;
 
 			ComponentSection section("SphereCollider", "Sphere Collider");
-			if (section.remove_clicked()) { entity.remove_component<me::components::SphereColliderComponent>(); return; }
+			if (section.remove_clicked()) { remove_via_history(entity, "SphereCollider", command_history); return; }
 			if (!section.body_visible()) return;
 
-			ImGui::DragFloat("Radius", &col->radius, 0.1f, 0.01f, 100.0f);
+			ImGui::DragFloat("Radius", &col->radius, fine(0.1f), 0.01f, 100.0f);
 			track_edit(entity, col, command_history);
 
 			ImGui::Checkbox("Show Debug Wireframe", &col->show_debug);
@@ -346,11 +358,7 @@ namespace editor {
 			if (!audio) return;
 
 			ComponentSection section("AudioSource", "Audio Source");
-			if (section.remove_clicked()) {
-				if (audio->clip.handle != 0) me::audio::release(audio->clip);
-				entity.remove_component<me::components::AudioSourceComponent>();
-				return;
-			}
+			if (section.remove_clicked()) { remove_via_history(entity, "AudioSource", command_history); return; }
 			if (!section.body_visible()) return;
 
 			ImGui::Text("Audio Clip");
@@ -371,10 +379,10 @@ namespace editor {
 				ImGui::EndDragDropTarget();
 			}
 
-			ImGui::DragFloat("Volume", &audio->volume, 0.05f, 0.0f, 10.0f);
+			ImGui::DragFloat("Volume", &audio->volume, fine(0.05f), 0.0f, 10.0f);
 			track_edit(entity, audio, command_history);
 
-			ImGui::DragFloat("Pitch", &audio->pitch, 0.05f, 0.1f, 3.0f);
+			ImGui::DragFloat("Pitch", &audio->pitch, fine(0.05f), 0.1f, 3.0f);
 			track_edit(entity, audio, command_history);
 
 			ImGui::Checkbox("Play on Awake", &audio->play_on_awake);
@@ -385,7 +393,7 @@ namespace editor {
 			track_edit(entity, audio, command_history);
 
 			if (audio->spatial) {
-				ImGui::DragFloat("Max Distance", &audio->max_distance, 1.0f, 0.1f, 1000.0f);
+				ImGui::DragFloat("Max Distance", &audio->max_distance, fine(1.0f), 0.1f, 1000.0f);
 				track_edit(entity, audio, command_history);
 			}
 
@@ -400,7 +408,7 @@ namespace editor {
 			if (!listener) return;
 
 			ComponentSection section("AudioListener", "Audio Listener");
-			if (section.remove_clicked()) { entity.remove_component<me::components::AudioListenerComponent>(); return; }
+			if (section.remove_clicked()) { remove_via_history(entity, "AudioListener", command_history); return; }
 			if (!section.body_visible()) return;
 
 			ImGui::Checkbox("Active Listener", &listener->active);
@@ -412,11 +420,7 @@ namespace editor {
 			if (!bgm) return;
 
 			ComponentSection section("BackgroundMusic", "Background Music");
-			if (section.remove_clicked()) {
-				if (bgm->stream.handle != 0) me::audio::release(bgm->stream);
-				entity.remove_component<me::components::BackgroundMusicComponent>();
-				return;
-			}
+			if (section.remove_clicked()) { remove_via_history(entity, "BackgroundMusic", command_history); return; }
 			if (!section.body_visible()) return;
 
 			ImGui::Text("Audio Track");
@@ -437,7 +441,7 @@ namespace editor {
 				ImGui::EndDragDropTarget();
 			}
 
-			ImGui::DragFloat("Volume", &bgm->volume, 0.05f, 0.0f, 10.0f);
+			ImGui::DragFloat("Volume", &bgm->volume, fine(0.05f), 0.0f, 10.0f);
 			track_edit(entity, bgm, command_history);
 
 			ImGui::Checkbox("Loop Track", &bgm->loop);
@@ -538,7 +542,6 @@ namespace editor {
 		// =================================================================
 
 		template <typename T> bool insp_has(me::Entity e) { return e.has_component<T>(); }
-		template <typename T> void insp_add(me::Entity e) { e.add_component<T>(T{}); }
 
 		enum class AddGroup { Scene, Physics, Audio };
 
@@ -547,29 +550,29 @@ namespace editor {
 			AddGroup group;                                      // Add-menu separators
 			bool (*has)(me::Entity);
 			void (*draw)(me::Entity, editor::CommandHistory&);   // nullptr => addable but no panel yet
-			void (*add)(me::Entity);
+			const char* meta_name;                               // me::ecs registry key (drives undoable add)
 		};
 
 		const std::vector<InspectorComponent>& inspector_components() {
 			using namespace me::components;
 			static const std::vector<InspectorComponent> table = {
-				{ "3D Primitive Shape", AddGroup::Scene,   insp_has<Shape3DComponent>,          draw_shape3d,            insp_add<Shape3DComponent> },
-				{ "3D Model",           AddGroup::Scene,   insp_has<Model3DComponent>,          draw_model3d,            insp_add<Model3DComponent> },
-				{ "Material",           AddGroup::Scene,   insp_has<MaterialComponent>,         draw_material,           insp_add<MaterialComponent> },
-				{ "Camera",             AddGroup::Scene,   insp_has<CameraComponent>,           draw_camera,             insp_add<CameraComponent> },
-				{ "Light",              AddGroup::Scene,   insp_has<LightComponent>,            draw_light,              insp_add<LightComponent> },
-				{ "Directional Light",  AddGroup::Scene,   insp_has<DirectionalLightComponent>, draw_directional_light,  insp_add<DirectionalLightComponent> },
-				{ "Rigid Body",         AddGroup::Physics, insp_has<RigidBodyComponent>,        draw_rigidbody,          insp_add<RigidBodyComponent> },
-				{ "Box Collider",       AddGroup::Physics, insp_has<BoxColliderComponent>,      draw_box_collider,       insp_add<BoxColliderComponent> },
-				{ "Sphere Collider",    AddGroup::Physics, insp_has<SphereColliderComponent>,   draw_sphere_collider,    insp_add<SphereColliderComponent> },
-				{ "Audio Source",       AddGroup::Audio,   insp_has<AudioSourceComponent>,      draw_audio_source,       insp_add<AudioSourceComponent> },
-				{ "Audio Listener",     AddGroup::Audio,   insp_has<AudioListenerComponent>,    draw_audio_listener,     insp_add<AudioListenerComponent> },
-				{ "Background Music",   AddGroup::Audio,   insp_has<BackgroundMusicComponent>,  draw_background_music,   insp_add<BackgroundMusicComponent> },
+				{ "3D Primitive Shape", AddGroup::Scene,   insp_has<Shape3DComponent>,          draw_shape3d,            "MeshRenderer" },
+				{ "3D Model",           AddGroup::Scene,   insp_has<Model3DComponent>,          draw_model3d,            "Model" },
+				{ "Material",           AddGroup::Scene,   insp_has<MaterialComponent>,         draw_material,           "Material" },
+				{ "Camera",             AddGroup::Scene,   insp_has<CameraComponent>,           draw_camera,             "Camera" },
+				{ "Light",              AddGroup::Scene,   insp_has<LightComponent>,            draw_light,              "Light" },
+				{ "Directional Light",  AddGroup::Scene,   insp_has<DirectionalLightComponent>, draw_directional_light,  "DirectionalLight" },
+				{ "Rigid Body",         AddGroup::Physics, insp_has<RigidBodyComponent>,        draw_rigidbody,          "RigidBody" },
+				{ "Box Collider",       AddGroup::Physics, insp_has<BoxColliderComponent>,      draw_box_collider,       "BoxCollider" },
+				{ "Sphere Collider",    AddGroup::Physics, insp_has<SphereColliderComponent>,   draw_sphere_collider,    "SphereCollider" },
+				{ "Audio Source",       AddGroup::Audio,   insp_has<AudioSourceComponent>,      draw_audio_source,       "AudioSource" },
+				{ "Audio Listener",     AddGroup::Audio,   insp_has<AudioListenerComponent>,    draw_audio_listener,     "AudioListener" },
+				{ "Background Music",   AddGroup::Audio,   insp_has<BackgroundMusicComponent>,  draw_background_music,   "BackgroundMusic" },
 			};
 			return table;
 		}
 
-		void draw_add_component_menu(me::Entity entity) {
+		void draw_add_component_menu(me::Entity entity, editor::CommandHistory& command_history) {
 			ImGui::Dummy(ImVec2(0, 10));
 			ImGui::Separator();
 			ImGui::Dummy(ImVec2(0, 10));
@@ -585,7 +588,10 @@ namespace editor {
 					if (!first && c.group != prev) ImGui::Separator();
 					first = false;
 					prev = c.group;
-					if (!c.has(entity) && ImGui::MenuItem(c.label)) c.add(entity);
+					if (!c.has(entity) && ImGui::MenuItem(c.label)) {
+						command_history.AddCommand(std::make_unique<editor::AddComponentCommand>(
+							me::get_registry(), entity.get_id(), c.meta_name));
+					}
 				}
 				ImGui::EndPopup();
 			}
@@ -607,7 +613,7 @@ namespace editor {
 			}
 
 			draw_script(selected_entity);
-			draw_add_component_menu(selected_entity);
+			draw_add_component_menu(selected_entity, command_history);
 		} else {
 			ImGui::Text("Select an entity to view its properties.");
 		}

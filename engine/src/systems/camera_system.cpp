@@ -31,9 +31,14 @@ namespace me::camera {
 		float move_strafe = -me::input::axis_value("MoveX");
 		float move_up = me::input::axis_value("MoveY");
 
-		t.position.x += (fwd_x * move_forward + right_x * move_strafe) * cam.move_speed * dt;
-		t.position.z += (fwd_z * move_forward + right_z * move_strafe) * cam.move_speed * dt; // Forward/Strafe affects Z
-		t.position.y += (move_up * cam.move_speed * dt);                                      // Up/Down affects Y
+		// Speed modifiers: Shift = sprint, Ctrl = precision placement.
+		float speed = cam.move_speed;
+		if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT))     speed *= 3.0f;
+		if (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) speed *= 0.2f;
+
+		t.position.x += (fwd_x * move_forward + right_x * move_strafe) * speed * dt;
+		t.position.z += (fwd_z * move_forward + right_z * move_strafe) * speed * dt; // Forward/Strafe affects Z
+		t.position.y += (move_up * speed * dt);                                      // Up/Down affects Y
 
 		cam.target.x = t.position.x + look_x;
 		cam.target.y = t.position.y + look_y;
