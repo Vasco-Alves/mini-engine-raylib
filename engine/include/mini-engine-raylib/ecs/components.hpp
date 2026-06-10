@@ -92,6 +92,7 @@ namespace me::components {
 		// Glass & Refraction
 		float transmission = 0.0f;           // 0.0 = Solid Opaque, 1.0 = Fully Transparent Glass
 		float ior = 1.5f;                    // Index of Refraction (1.0=Air, 1.33=Water, 1.5=Glass, 2.4=Diamond)
+		float tint_strength = 1.0f;          // Beer–Lambert density multiplier: 0 = always clear, 1 = physical, >1 = denser tint
 	};
 
 } // namespace me::components

@@ -62,6 +62,8 @@ namespace me::raytracing {
 		float t_max = FLT_MAX;
 		int   hit_axis = -1;
 		float hit_sign = 1.0f;
+		int   exit_axis = -1;
+		float exit_sign = 1.0f;
 
 		// Unit cube spans [-1, 1] on each axis.
 		const float halves[3] = { 1.0f, 1.0f, 1.0f };
@@ -87,25 +89,38 @@ namespace me::raytracing {
 				}
 
 				if (t1 > t_min) { t_min = t1; hit_axis = axis; hit_sign = sign; }
-				t_max = std::min(t_max, t2);
+				// The exit face on this axis is the opposite one → opposite sign.
+				if (t2 < t_max) { t_max = t2; exit_axis = axis; exit_sign = -sign; }
 				if (t_min > t_max) return false;
 			}
 		}
 
-		if (t_min < RAY_TMIN || hit_axis < 0) return false;
+		// Entry face when the ray starts outside the box; exit face when it starts
+		// inside (a refracted ray traveling through glass needs the back-face hit
+		// so Beer–Lambert absorption sees the interior distance) — mirrors the
+		// sphere's far-hit fallback above.
+		float t_local = t_min;
+		int   face_axis = hit_axis;
+		float face_sign = hit_sign;
+		if (t_min < RAY_TMIN) {
+			t_local = t_max;
+			face_axis = exit_axis;
+			face_sign = exit_sign;
+		}
+		if (t_local < RAY_TMIN || face_axis < 0) return false;
 
 		// Convert the local-space hit distance back to world-space distance.
 		// We reconstruct the world hit point and measure it from the ray origin.
-		Vector3 local_hit = Vector3Add(local_origin, Vector3Scale(local_dir, t_min));
+		Vector3 local_hit = Vector3Add(local_origin, Vector3Scale(local_dir, t_local));
 		Vector3 world_hit = Vector3Transform(local_hit, model_matrix);
 		out_t = Vector3Distance(ray_origin, world_hit);
 
 		// Build the local normal and transform it to world space via the
 		// normal matrix (transpose of the inverse model matrix).
 		Vector3 local_normal = { 0.0f, 0.0f, 0.0f };
-		if (hit_axis == 0) local_normal.x = hit_sign;
-		else if (hit_axis == 1) local_normal.y = hit_sign;
-		else                    local_normal.z = hit_sign;
+		if (face_axis == 0) local_normal.x = face_sign;
+		else if (face_axis == 1) local_normal.y = face_sign;
+		else                     local_normal.z = face_sign;
 
 		Matrix normal_matrix = MatrixTranspose(inv_model);
 		out_normal.x = local_normal.x * normal_matrix.m0 + local_normal.y * normal_matrix.m4 + local_normal.z * normal_matrix.m8;

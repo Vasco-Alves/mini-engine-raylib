@@ -23,7 +23,7 @@ namespace me::render::gpu {
 		uint32_t count;      // 0 = internal node, > 0 = leaf node
 	};
 
-	// 3. The GPU Material (Aligned to 32 bytes)
+	// 3. The GPU Material (Aligned to 48 bytes — pads keep the std430 stride exact)
 	struct GPUMaterial {
 		Vector3 base_color;
 		float   roughness;
@@ -32,6 +32,11 @@ namespace me::render::gpu {
 		float   emission;
 		float   transmission;
 		float   ior;
+
+		float   tint_strength; // Beer–Lambert density multiplier (0 = always clear)
+		float   pad0;
+		float   pad1;
+		float   pad2;
 	};
 
 	// 4. The GPU Primitive (For Spheres, Planes, and linking Models)

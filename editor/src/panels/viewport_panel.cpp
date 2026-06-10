@@ -31,7 +31,7 @@ namespace editor {
 		EndTextureMode();
 	}
 
-	void ViewportPanel::on_imgui_render(me::components::TransformComponent& cam_transform, me::components::CameraComponent& camera, me::Entity selected_entity, int gizmo_type, editor::CommandHistory& command_history, Texture2D* raytraced_texture, bool is_render_mode) {
+	void ViewportPanel::on_imgui_render(me::components::TransformComponent& cam_transform, me::components::CameraComponent& camera, me::Entity selected_entity, int gizmo_type, editor::CommandHistory& command_history, Texture2D* raytraced_texture, bool is_render_mode, me::systems::RaytracerSystem* raytracer) {
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{ 0, 0 });
 		ImGui::Begin("Scene View");
 
@@ -228,6 +228,35 @@ namespace editor {
 			}
 
 		} // <-- End of !is_render_mode block
+
+		// ==========================================
+		// CLICK-TO-FOCUS (Render mode → set the DoF focal plane from the clicked point)
+		// ==========================================
+		if (is_render_mode && raytracer && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsWindowHovered()) {
+			ImVec2 mouse_pos = ImGui::GetMousePos();
+			Vector2 rel_mouse = { mouse_pos.x - viewportPos.x, mouse_pos.y - viewportPos.y };
+
+			if (rel_mouse.x >= 0 && rel_mouse.x <= m_Bounds.x && rel_mouse.y >= 0 && rel_mouse.y <= m_Bounds.y) {
+				float nx = (2.0f * rel_mouse.x) / m_Bounds.x - 1.0f;
+				float ny = 1.0f - (2.0f * rel_mouse.y) / m_Bounds.y;
+
+				Matrix view = MatrixLookAt(
+					{ cam_transform.position.x, cam_transform.position.y, cam_transform.position.z },
+					{ camera.target.x, camera.target.y, camera.target.z },
+					{ camera.up.x, camera.up.y, camera.up.z });
+				Matrix proj = MatrixPerspective(camera.fov * DEG2RAD, m_Bounds.x / m_Bounds.y, 0.01f, 1000.0f);
+				Matrix viewProjInv = MatrixInvert(MatrixMultiply(view, proj));
+
+				float wx = viewProjInv.m0 * nx + viewProjInv.m4 * ny + viewProjInv.m8 + viewProjInv.m12;
+				float wy = viewProjInv.m1 * nx + viewProjInv.m5 * ny + viewProjInv.m9 + viewProjInv.m13;
+				float wz = viewProjInv.m2 * nx + viewProjInv.m6 * ny + viewProjInv.m10 + viewProjInv.m14;
+				float ww = viewProjInv.m3 * nx + viewProjInv.m7 * ny + viewProjInv.m11 + viewProjInv.m15;
+
+				Vector3 origin = { cam_transform.position.x, cam_transform.position.y, cam_transform.position.z };
+				Vector3 dir = Vector3Normalize(Vector3Subtract({ wx / ww, wy / ww, wz / ww }, origin));
+				raytracer->focus_on_ray(me::get_registry(), origin, dir);
+			}
+		}
 
 		ImGui::End();
 		ImGui::PopStyleVar();

@@ -77,10 +77,12 @@ namespace editor {
 		// --- Export State Tracking ---
 		bool m_ShowExportModal = false;
 		bool m_IsExporting = false;
-		int m_ExportCurrentSample = 0;
 		int m_PreviewW = 0;
 		int m_PreviewH = 0;
+		// Viewport settings the export temporarily overrides, restored after.
 		int m_ExportSavedPreviewSamples = 50;
+		bool m_ExportSavedAccumulate = false;
+		int m_ExportSavedBounces = 3;
 		std::string m_ExportPath = "";
 
 		// --- Camera ---

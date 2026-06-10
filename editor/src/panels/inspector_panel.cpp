@@ -179,6 +179,11 @@ namespace editor {
 
 			ImGui::DragFloat("IOR", &mat->ior, 0.01f, 1.0f, 3.0f, "%.2f");
 			track_edit(entity, mat, command_history);
+
+			// How strongly the glass interior absorbs toward the albedo:
+			// 0 = always clear, 1 = physical Beer–Lambert, higher = denser tint.
+			ImGui::SliderFloat("Tint Strength", &mat->tint_strength, 0.0f, 10.0f, "%.2f");
+			track_edit(entity, mat, command_history);
 		}
 
 		void draw_model3d(me::Entity entity, editor::CommandHistory& command_history) {

@@ -661,6 +661,7 @@ namespace me::raytracing {
 				};
 				p.transmission = mat->transmission;
 				p.ior = mat->ior;
+				p.tint_strength = mat->tint_strength;
 			} else {
 				// Convert sRGB to Linear Space
 				p.base_color = {
@@ -673,6 +674,7 @@ namespace me::raytracing {
 				p.emission = { 0.0f, 0.0f, 0.0f };
 				p.transmission = 0.0f;
 				p.ior = 1.0f;
+				p.tint_strength = 1.0f;
 			}
 
 			return p;

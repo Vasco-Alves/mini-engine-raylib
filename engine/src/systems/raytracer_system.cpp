@@ -142,6 +142,23 @@ namespace me::systems {
 		}
 	}
 
+	bool RaytracerSystem::focus_on_ray(me::Registry& registry, const Vector3& origin, const Vector3& dir) {
+		if (m_BVH.empty()) return false;
+
+		Vector3 inv = {
+			1.0f / (std::abs(dir.x) > 1e-8f ? dir.x : 1e-8f),
+			1.0f / (std::abs(dir.y) > 1e-8f ? dir.y : 1e-8f),
+			1.0f / (std::abs(dir.z) > 1e-8f ? dir.z : 1e-8f)
+		};
+		auto hit = m_BVH.traverse(origin, dir, inv, FLT_MAX, registry);
+		if (!hit) return false;
+
+		focus_distance = hit->hit_distance;
+		reset_accumulation(); // re-accumulate against the new focal plane
+		me::logger::info("Focus distance set to " + std::to_string(focus_distance));
+		return true;
+	}
+
 	void RaytracerSystem::export_to_png(const std::string& filepath) {
 		if (current_backend == RenderBackend::GPU && m_OutputTexture.id != 0) {
 			m_PixelData.resize(m_Width * m_Height);
@@ -211,6 +228,16 @@ namespace me::systems {
 
 					// Trace and accumulate.
 					Vector3 light = trace_ray(ray, 0, seed);
+
+					// Firefly clamp: cap one sample's brightness so rare ultra-bright paths
+					// don't leave permanent noise specks (0 disables).
+					if (firefly_clamp > 0.0f) {
+						float lum = 0.2126f * light.x + 0.7152f * light.y + 0.0722f * light.z;
+						if (lum > firefly_clamp) {
+							float s = firefly_clamp / lum;
+							light.x *= s; light.y *= s; light.z *= s;
+						}
+					}
 
 					m_AccumulationBuffer[index].x += light.x;
 					m_AccumulationBuffer[index].y += light.y;
@@ -349,10 +376,12 @@ namespace me::systems {
 			trans.x *= f; trans.y *= f; trans.z *= f;
 
 			// A back-face hit means the segment just crossed was inside the glass.
+			// tint_strength scales the absorption density (0 = always clear).
 			if (!hit->front_face) {
-				trans.x *= std::pow(std::max(hit->base_color.x, 0.001f), hit->hit_distance);
-				trans.y *= std::pow(std::max(hit->base_color.y, 0.001f), hit->hit_distance);
-				trans.z *= std::pow(std::max(hit->base_color.z, 0.001f), hit->hit_distance);
+				float d = hit->hit_distance * hit->tint_strength;
+				trans.x *= std::pow(std::max(hit->base_color.x, 0.001f), d);
+				trans.y *= std::pow(std::max(hit->base_color.y, 0.001f), d);
+				trans.z *= std::pow(std::max(hit->base_color.z, 0.001f), d);
 			}
 
 			if (std::max({ trans.x, trans.y, trans.z }) < 0.01f) return { 0.0f, 0.0f, 0.0f };
@@ -614,9 +643,10 @@ namespace me::systems {
 			// energy split is already handled by the Fresnel reflect/refract above.
 			Vector3 absorb = { 1.0f, 1.0f, 1.0f };
 			if (!p.front_face) {
-				absorb.x = std::pow(std::max(p.base_color.x, 0.001f), p.hit_distance);
-				absorb.y = std::pow(std::max(p.base_color.y, 0.001f), p.hit_distance);
-				absorb.z = std::pow(std::max(p.base_color.z, 0.001f), p.hit_distance);
+				float d = p.hit_distance * p.tint_strength;
+				absorb.x = std::pow(std::max(p.base_color.x, 0.001f), d);
+				absorb.y = std::pow(std::max(p.base_color.y, 0.001f), d);
+				absorb.z = std::pow(std::max(p.base_color.z, 0.001f), d);
 			}
 			bounce = { bounce_color.x * absorb.x, bounce_color.y * absorb.y, bounce_color.z * absorb.z };
 		} else {
@@ -707,6 +737,7 @@ namespace me::systems {
 				gpu_mat.emission = mat->emission_power;
 				gpu_mat.transmission = mat->transmission;
 				gpu_mat.ior = mat->ior;
+				gpu_mat.tint_strength = mat->tint_strength;
 			} else {
 				me::Color base_col = shape ? shape->color : (model ? model->tint : me::Color::white);
 				gpu_mat.base_color = { std::pow(base_col.r / 255.0f, 2.2f), std::pow(base_col.g / 255.0f, 2.2f), std::pow(base_col.b / 255.0f, 2.2f) };
@@ -715,6 +746,7 @@ namespace me::systems {
 				gpu_mat.emission = 0.0f;
 				gpu_mat.transmission = 0.0f;
 				gpu_mat.ior = 1.0f;
+				gpu_mat.tint_strength = 1.0f;
 			}
 			gpu_prim.material_index = static_cast<int>(m_GPUMaterials.size());
 			m_GPUMaterials.push_back(gpu_mat);
@@ -965,6 +997,8 @@ namespace me::systems {
 		rlSetUniform(loc_exposure, &exposure, RL_SHADER_UNIFORM_FLOAT, 1);
 		rlSetUniform(loc_aperture, &aperture, RL_SHADER_UNIFORM_FLOAT, 1);
 		rlSetUniform(loc_focus, &focus_distance, RL_SHADER_UNIFORM_FLOAT, 1);
+		int loc_firefly = rlGetLocationUniform(m_ComputeShaderProgram, "firefly_clamp");
+		rlSetUniform(loc_firefly, &firefly_clamp, RL_SHADER_UNIFORM_FLOAT, 1);
 
 		// 3. Bind the Output Texture
 		// We tell OpenGL: "Take m_OutputTexture, and let the Compute Shader write directly into its memory!"

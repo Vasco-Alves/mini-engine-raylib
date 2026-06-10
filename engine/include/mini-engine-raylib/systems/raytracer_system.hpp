@@ -28,6 +28,10 @@ namespace me::systems {
 		Texture2D* get_texture() { return &m_OutputTexture; }
 		void       export_to_png(const std::string& filepath);
 
+		// Sets focus_distance from the nearest scene hit along a ray (click-to-focus).
+		// Returns true if something was hit. Requires the BVH (built in render mode).
+		bool focus_on_ray(me::Registry& registry, const Vector3& origin, const Vector3& dir);
+
 		// Pass the registry so the BVH can be rebuilt whenever the scene changes.
 		// Passing nullptr just resets the frame counter without a rebuild
 		// (useful for the non-accumulation real-time noisy mode).
@@ -80,11 +84,15 @@ namespace me::systems {
 		float exposure = 0.6f;        // tonemap brightness before the ACES curve
 		float aperture = 0.0f;        // lens radius for depth of field; 0 = pinhole (all sharp)
 		float focus_distance = 10.0f; // distance to the in-focus plane
+		float firefly_clamp = 20.0f;  // cap per-sample brightness to kill noise specks; 0 = off
 
 		// --- Export Settings ---
+		// Used only while exporting; the viewport's own resolution, sample
+		// target and bounce count are saved and restored around the export.
 		int export_width = 1920;
 		int export_height = 1080;
 		int export_samples = 50;
+		int export_bounces = 8;
 
 		uint32_t m_TotalFramesRendered = 0;
 

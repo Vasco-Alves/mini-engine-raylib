@@ -23,6 +23,7 @@ namespace me::raytracing {
 		Vector3 emission;
 		float   transmission;
 		float   ior;
+		float   tint_strength; // Beer–Lambert density multiplier (0 = always clear)
 		bool    front_face; // Are we entering the glass, or exiting it?
 	};
 

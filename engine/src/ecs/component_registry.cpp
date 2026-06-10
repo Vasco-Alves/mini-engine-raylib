@@ -124,6 +124,7 @@ namespace me::ecs {
 					j["emission_power"] = c.emission_power;
 					j["transmission"] = c.transmission;
 					j["ior"] = c.ior;
+					j["tint_strength"] = c.tint_strength;
 					return j;
 				},
 				[](MaterialComponent& c, const json& j) {
@@ -133,6 +134,7 @@ namespace me::ecs {
 					c.emission_power = j.value("emission_power", 0.0f);
 					c.transmission = j.value("transmission", 0.0f);
 					c.ior = j.value("ior", 1.5f);
+					c.tint_strength = j.value("tint_strength", 1.0f);
 				}));
 
 			// Script — custom: dual-format load, only added when non-empty, and the

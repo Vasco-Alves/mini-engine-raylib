@@ -138,7 +138,9 @@ namespace editor {
 		// ==========================================
 		// RAYTRACER UPDATE
 		// ==========================================
-		if (m_SceneState == SceneState::Render) {
+		// While exporting, the progress modal drives the renders at the export
+		// resolution — pause the viewport pass so all time goes to the export.
+		if (m_SceneState == SceneState::Render && !m_IsExporting) {
 			m_Raytracer.on_update(me::get_registry(), m_EditorCamera, m_EditorCameraTransform);
 		}
 
@@ -304,7 +306,8 @@ namespace editor {
 			active_gizmo,
 			m_CommandHistory,
 			m_Raytracer.get_texture(), // Pass the texture pointer
-			is_rendering               // Pass the state boolean
+			is_rendering,              // Pass the state boolean
+			&m_Raytracer               // For click-to-focus (DoF)
 		);
 
 		// ==========================================
@@ -313,12 +316,17 @@ namespace editor {
 		if (m_SceneState == SceneState::Render) {
 			// Recreate the output texture when the viewport is resized (window or panel drag).
 			// Uses resize() — not on_stop/on_start — to preserve the shader and SSBOs.
-			int new_w = (int)(m_ViewportPanel.get_bounds().x * m_Raytracer.resolution_scale);
-			int new_h = (int)(m_ViewportPanel.get_bounds().y * m_Raytracer.resolution_scale);
-			if (new_w < 1) new_w = 1;
-			if (new_h < 1) new_h = 1;
-			if (new_w != m_Raytracer.get_width() || new_h != m_Raytracer.get_height()) {
-				m_Raytracer.resize(new_w, new_h);
+			// Skipped while exporting: the raytracer renders at the export resolution
+			// then, and this tracker would stomp it back to viewport size (resetting
+			// accumulation and silently exporting at viewport resolution).
+			if (!m_IsExporting) {
+				int new_w = (int)(m_ViewportPanel.get_bounds().x * m_Raytracer.resolution_scale);
+				int new_h = (int)(m_ViewportPanel.get_bounds().y * m_Raytracer.resolution_scale);
+				if (new_w < 1) new_w = 1;
+				if (new_h < 1) new_h = 1;
+				if (new_w != m_Raytracer.get_width() || new_h != m_Raytracer.get_height()) {
+					m_Raytracer.resize(new_w, new_h);
+				}
 			}
 
 			ImGui::Begin("Raytracer Settings");
@@ -401,6 +409,11 @@ namespace editor {
 				m_Raytracer.reset_accumulation();
 			}
 			if (ImGui::SliderFloat("Focus Distance", &m_Raytracer.focus_distance, 0.1f, 100.0f, "%.2f")) {
+				m_Raytracer.reset_accumulation();
+			}
+			// Firefly clamp: lower to suppress bright noise specks; raise above your
+			// brightest emitter so it doesn't dim the lights. 0 turns it off.
+			if (ImGui::SliderFloat("Firefly Clamp", &m_Raytracer.firefly_clamp, 0.0f, 50.0f, "%.1f")) {
 				m_Raytracer.reset_accumulation();
 			}
 
@@ -919,10 +932,12 @@ namespace editor {
 			ImGui::Separator();
 			ImGui::Dummy(ImVec2(0, 5));
 
+			// These apply ONLY to the export — the viewport keeps its own
+			// resolution / samples / bounces and gets them back afterwards.
 			ImGui::InputInt("Width", &m_Raytracer.export_width);
 			ImGui::InputInt("Height", &m_Raytracer.export_height);
 			ImGui::InputInt("Samples (Rays per Pixel)", &m_Raytracer.export_samples);
-			ImGui::InputInt("Max Bounces", &m_Raytracer.max_bounces);
+			ImGui::InputInt("Max Bounces", &m_Raytracer.export_bounces);
 
 			ImGui::Dummy(ImVec2(0, 10));
 
@@ -937,20 +952,31 @@ namespace editor {
 				std::strftime(time_str, sizeof(time_str), "%Y%m%d_%H%M%S", std::localtime(&now));
 				m_ExportPath = (m_ProjectPath / "renders" / (std::string("render_") + time_str + ".png")).string();
 
-				// 2. Save Preview Resolution
+				// 2. Sanitize the export settings (InputInt allows anything).
+				if (m_Raytracer.export_width < 1)  m_Raytracer.export_width = 1;
+				if (m_Raytracer.export_height < 1) m_Raytracer.export_height = 1;
+				if (m_Raytracer.export_samples < 2) m_Raytracer.export_samples = 2;
+				if (m_Raytracer.export_bounces < 1)  m_Raytracer.export_bounces = 1;
+				if (m_Raytracer.export_bounces > 16) m_Raytracer.export_bounces = 16;
+
+				// 3. Save the viewport state the export overrides.
 				m_PreviewW = m_Raytracer.get_width();
 				m_PreviewH = m_Raytracer.get_height();
-
-				// 3. Resize to export resolution (preserves shader + SSBOs).
-				// Force full accumulation for the export pass.
-				m_Raytracer.resize(m_Raytracer.export_width, m_Raytracer.export_height);
 				m_ExportSavedPreviewSamples = m_Raytracer.preview_samples;
+				m_ExportSavedAccumulate = m_Raytracer.accumulate;
+				m_ExportSavedBounces = m_Raytracer.max_bounces;
+
+				// 4. Switch the raytracer to the export configuration. resize()
+				// preserves the shader + SSBOs and restarts accumulation; the
+				// viewport pass and the viewport-size tracker pause while
+				// m_IsExporting is set, so the export owns every render.
+				m_Raytracer.resize(m_Raytracer.export_width, m_Raytracer.export_height);
 				m_Raytracer.accumulate = true;
 				m_Raytracer.preview_samples = m_Raytracer.export_samples;
+				m_Raytracer.max_bounces = m_Raytracer.export_bounces;
 
-				// 4. TRIGGER THE EXPORT STATE (Do NOT run a for-loop here!)
+				// 5. Hand rendering over to the progress modal.
 				m_IsExporting = true;
-				m_ExportCurrentSample = 0;
 
 				m_ShowExportModal = false;
 				ImGui::CloseCurrentPopup();
@@ -969,34 +995,47 @@ namespace editor {
 		// ==========================================
 		if (m_IsExporting) ImGui::OpenPopup("Rendering...");
 
-		if (ImGui::BeginPopupModal("Rendering...", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs)) {
+		if (ImGui::BeginPopupModal("Rendering...", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+
+			// Restores everything the export overrode. resize() back to the
+			// viewport resolution also restarts the viewport accumulation.
+			auto finish_export = [&]() {
+				m_Raytracer.resize(m_PreviewW, m_PreviewH);
+				m_Raytracer.preview_samples = m_ExportSavedPreviewSamples;
+				m_Raytracer.accumulate = m_ExportSavedAccumulate;
+				m_Raytracer.max_bounces = m_ExportSavedBounces;
+				m_IsExporting = false;
+			};
 
 			ImGui::Text("Rendering High-Resolution Image (%dx%d)", m_Raytracer.export_width, m_Raytracer.export_height);
 			ImGui::Dummy(ImVec2(0, 5));
 
-			// Calculate progress (0.0 to 1.0)
-			float progress = (float)m_ExportCurrentSample / (float)m_Raytracer.export_samples;
+			// Progress reads the raytracer's own accumulation counter, so the
+			// bar can never drift from what was actually rendered.
+			int done = m_Raytracer.get_accumulated_frames();
+			float progress = (float)done / (float)m_Raytracer.export_samples;
+			if (progress > 1.0f) progress = 1.0f;
 			ImGui::ProgressBar(progress, ImVec2(300, 20));
-			ImGui::Text("Calculating sample: %d / %d", m_ExportCurrentSample, m_Raytracer.export_samples);
+			ImGui::Text("Calculating sample: %d / %d", done, m_Raytracer.export_samples);
 
-			// --- THE FIX: Render a "Chunk" of samples before drawing the UI ---
-			int samples_per_frame = 10; // Adjust this! 10 is a great balance of speed vs responsive UI.
+			// Render a chunk of samples per UI frame — fast export, responsive UI.
+			// The viewport pass is paused, so these are the only renders running.
+			const int samples_per_frame = 10;
+			for (int i = 0; i < samples_per_frame
+				&& m_Raytracer.get_accumulated_frames() < m_Raytracer.export_samples; ++i) {
+				m_Raytracer.on_update(me::get_registry(), m_EditorCamera, m_EditorCameraTransform);
+			}
 
-			for (int i = 0; i < samples_per_frame; ++i) {
-				if (m_ExportCurrentSample < m_Raytracer.export_samples) {
+			if (m_Raytracer.get_accumulated_frames() >= m_Raytracer.export_samples) {
+				m_Raytracer.export_to_png(m_ExportPath);
+				finish_export();
+				ImGui::CloseCurrentPopup();
+			}
 
-					m_Raytracer.on_update(me::get_registry(), m_EditorCamera, m_EditorCameraTransform);
-					m_ExportCurrentSample++;
-
-				} else {
-					// WE ARE DONE!
-					m_Raytracer.export_to_png(m_ExportPath);
-					m_Raytracer.resize(m_PreviewW, m_PreviewH);
-					m_Raytracer.preview_samples = m_ExportSavedPreviewSamples;
-					m_IsExporting = false;
-					ImGui::CloseCurrentPopup();
-					break; // Exit the chunk loop early if we finish
-				}
+			ImGui::Dummy(ImVec2(0, 5));
+			if (ImGui::Button("Cancel", ImVec2(300, 0))) {
+				finish_export(); // no PNG written
+				ImGui::CloseCurrentPopup();
 			}
 
 			ImGui::EndPopup();

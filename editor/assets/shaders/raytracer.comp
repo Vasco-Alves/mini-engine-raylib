@@ -17,6 +17,7 @@ struct GPUNode {
 struct GPUMaterial {
     vec3 base_color; float roughness;
     float metallic; float emission; float transmission; float ior;
+    float tint_strength; float pad0; float pad1; float pad2; // matches C++ GPUMaterial (48 B)
 };
 struct GPUPrimitive {
     int type; int material_index; int blas_root_index; float pad0;
@@ -72,6 +73,7 @@ uniform float sky_intensity;
 uniform float exposure;       // tonemap brightness
 uniform float aperture;       // lens radius for depth of field (0 = pinhole)
 uniform float focus_distance; // distance to the focal plane
+uniform float firefly_clamp;  // cap per-sample brightness (0 = off)
 
 const float PI     = 3.14159265359;
 const float INV_PI = 0.31830988618;
@@ -189,6 +191,7 @@ bool intersect_cube(Ray ray, mat4 inv_model, mat4 normal_mat, out float world_t,
     vec3 ld = normalize(rl_transform_dir(inv_model, ray.direction));
     float t_enter = -1e38, t_exit = 1e38;
     int hit_axis = -1; float hit_sign = 1.0;
+    int exit_axis = -1; float exit_sign = 1.0;
     for (int axis = 0; axis < 3; axis++) {
         float d = (axis==0)?ld.x:(axis==1)?ld.y:ld.z;
         float o = (axis==0)?lo.x:(axis==1)?lo.y:lo.z;
@@ -196,13 +199,19 @@ bool intersect_cube(Ray ray, mat4 inv_model, mat4 normal_mat, out float world_t,
         float inv_d = 1.0/d, t1=(-1.0-o)*inv_d, t2=(1.0-o)*inv_d, s=-1.0;
         if (t1>t2){float tmp=t1;t1=t2;t2=tmp;s=1.0;}
         if (t1>t_enter){t_enter=t1;hit_axis=axis;hit_sign=s;}
-        t_exit=min(t_exit,t2);
+        // The exit face on this axis is the opposite one → opposite sign.
+        if (t2<t_exit){t_exit=t2;exit_axis=axis;exit_sign=-s;}
         if (t_enter>t_exit) return false;
     }
-    if (t_enter < 0.001 || hit_axis < 0) return false;
-    world_t = length(rl_transform_point(inverse(inv_model), lo + ld*t_enter) - ray.origin);
+    // Entry face when the ray starts outside; exit face when it starts inside
+    // (a refracted interior ray needs the back face so Beer–Lambert sees the
+    // interior distance) — mirrors the sphere's far-hit fallback / CPU intersect_obb.
+    float t_local = t_enter; int face_axis = hit_axis; float face_sign = hit_sign;
+    if (t_enter < 0.001) { t_local = t_exit; face_axis = exit_axis; face_sign = exit_sign; }
+    if (t_local < 0.001 || face_axis < 0) return false;
+    world_t = length(rl_transform_point(inverse(inv_model), lo + ld*t_local) - ray.origin);
     vec3 local_n = vec3(0.0);
-    if(hit_axis==0)local_n.x=hit_sign; else if(hit_axis==1)local_n.y=hit_sign; else local_n.z=hit_sign;
+    if(face_axis==0)local_n.x=face_sign; else if(face_axis==1)local_n.y=face_sign; else local_n.z=face_sign;
     world_n = normalize(rl_transform_dir(normal_mat, local_n));
     return true;
 }
@@ -313,8 +322,9 @@ vec3 shadow_transmittance(vec3 origin, vec3 dir, float max_t) {
         trans *= 1.0 - schlick(cos_i, om.ior);
 
         // A back-face hit means the segment just crossed was inside the glass.
+        // tint_strength scales the absorption density (0 = always clear).
         if (!h.front_face)
-            trans *= pow(max(om.base_color, vec3(0.001)), vec3(h.t));
+            trans *= pow(max(om.base_color, vec3(0.001)), vec3(h.t * om.tint_strength));
 
         if (max(trans.r, max(trans.g, trans.b)) < 0.01) return vec3(0.0);
 
@@ -482,7 +492,7 @@ void main() {
             // (a back-face hit means the segment just crossed was interior), so
             // thick tinted glass looks denser than thin tinted glass.
             if (!hit.front_face)
-                throughput *= pow(max(mat.base_color, vec3(0.001)), vec3(hit.t));
+                throughput *= pow(max(mat.base_color, vec3(0.001)), vec3(hit.t * mat.tint_strength));
             allow_emissive = true; // glass is specular: it may see emitters
         } else {
             // Opaque — direct lighting + ambient + scatter (mirrors CPU trace_ray)
@@ -510,6 +520,13 @@ void main() {
             // surfaces already received emitter light through NEE.
             allow_emissive = (mat.roughness < 0.1);
         }
+    }
+
+    // Firefly clamp: cap a single sample's brightness so rare ultra-bright paths
+    // don't leave permanent noise specks (0 disables).
+    if (firefly_clamp > 0.0) {
+        float lum = dot(final_color, vec3(0.2126, 0.7152, 0.0722));
+        if (lum > firefly_clamp) final_color *= firefly_clamp / lum;
     }
 
     // ACES Filmic + gamma (matches CPU)
