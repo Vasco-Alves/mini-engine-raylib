@@ -10,6 +10,7 @@
 #include <mini-engine-raylib/render/color.hpp>
 #include <imgui.h>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
@@ -227,6 +228,9 @@ namespace editor {
 
 			ImGui::DragFloat("Intensity", &light->intensity, 0.1f, 0.0f, 100.0f);
 			track_edit(entity, light, command_history);
+
+			ImGui::DragFloat("Radius (Softness)", &light->radius, 0.01f, 0.0f, 20.0f);
+			track_edit(entity, light, command_history);
 		}
 
 		void draw_directional_light(me::Entity entity, editor::CommandHistory& command_history) {
@@ -244,6 +248,35 @@ namespace editor {
 
 			ImGui::DragFloat("Intensity", &light->intensity, 0.1f, 0.0f, 100.0f);
 			track_edit(entity, light, command_history);
+
+			ImGui::DragFloat("Angular Radius (deg)", &light->angular_radius, 0.05f, 0.0f, 30.0f);
+			track_edit(entity, light, command_history);
+		}
+
+		void draw_camera(me::Entity entity, editor::CommandHistory& command_history) {
+			auto* cam = entity.try_get_component<me::components::CameraComponent>();
+			if (!cam) return;
+
+			ComponentSection section("Camera", "Camera");
+			if (section.remove_clicked()) { entity.remove_component<me::components::CameraComponent>(); return; }
+			if (!section.body_visible()) return;
+
+			ImGui::Checkbox("Active (primary)", &cam->active);
+			track_edit(entity, cam, command_history);
+
+			const char* projections[] = { "Perspective", "Orthographic" };
+			int proj = cam->projection;
+			if (ImGui::Combo("Projection", &proj, projections, 2)) cam->projection = proj;
+			track_edit(entity, cam, command_history);
+
+			ImGui::DragFloat("Field of View", &cam->fov, 0.5f, 1.0f, 179.0f);
+			track_edit(entity, cam, command_history);
+
+			ImGui::DragFloat3("Look-at Target", &cam->target.x, 0.1f);
+			track_edit(entity, cam, command_history);
+
+			ImGui::DragFloat3("Up", &cam->up.x, 0.05f);
+			track_edit(entity, cam, command_history);
 		}
 
 		void draw_rigidbody(me::Entity entity, editor::CommandHistory& command_history) {
@@ -518,7 +551,7 @@ namespace editor {
 				{ "3D Primitive Shape", AddGroup::Scene,   insp_has<Shape3DComponent>,          draw_shape3d,            insp_add<Shape3DComponent> },
 				{ "3D Model",           AddGroup::Scene,   insp_has<Model3DComponent>,          draw_model3d,            insp_add<Model3DComponent> },
 				{ "Material",           AddGroup::Scene,   insp_has<MaterialComponent>,         draw_material,           insp_add<MaterialComponent> },
-				{ "Camera",             AddGroup::Scene,   insp_has<CameraComponent>,           nullptr,                 insp_add<CameraComponent> },
+				{ "Camera",             AddGroup::Scene,   insp_has<CameraComponent>,           draw_camera,             insp_add<CameraComponent> },
 				{ "Light",              AddGroup::Scene,   insp_has<LightComponent>,            draw_light,              insp_add<LightComponent> },
 				{ "Directional Light",  AddGroup::Scene,   insp_has<DirectionalLightComponent>, draw_directional_light,  insp_add<DirectionalLightComponent> },
 				{ "Rigid Body",         AddGroup::Physics, insp_has<RigidBodyComponent>,        draw_rigidbody,          insp_add<RigidBodyComponent> },

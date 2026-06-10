@@ -16,6 +16,26 @@
 
 namespace me::systems {
 
+	namespace {
+		// Uniformly samples a direction within the cone of half-angle acos(cos_max)
+		// around `dir`. cos_max == 1 returns `dir` exactly (a hard, point-like sample);
+		// smaller cos_max widens the cone, which softens shadows as samples accumulate.
+		Vector3 sample_cone(const Vector3& dir, float cos_max, uint32_t& seed) {
+			float r1 = me::raytracing::random_float(seed);
+			float r2 = me::raytracing::random_float(seed);
+			float cos_t = 1.0f - r1 * (1.0f - cos_max);
+			float sin_t = std::sqrt(std::max(0.0f, 1.0f - cos_t * cos_t));
+			float phi = 2.0f * PI * r2;
+			Vector3 a = (std::abs(dir.x) > 0.9f) ? Vector3{ 0.0f, 1.0f, 0.0f } : Vector3{ 1.0f, 0.0f, 0.0f };
+			Vector3 u = Vector3Normalize(Vector3CrossProduct(dir, a));
+			Vector3 v = Vector3CrossProduct(dir, u);
+			Vector3 s = Vector3Add(
+				Vector3Add(Vector3Scale(u, std::cos(phi) * sin_t), Vector3Scale(v, std::sin(phi) * sin_t)),
+				Vector3Scale(dir, cos_t));
+			return Vector3Normalize(s);
+		}
+	}
+
 	RaytracerSystem::RaytracerSystem() {
 		m_OutputTexture.id = 0;
 	}
@@ -187,7 +207,7 @@ namespace me::systems {
 					// m_FrameCount drives the Halton sequence (starts at 1, never 0,
 					// which avoids the degenerate (0,0) sample at the pixel center).
 					me::raytracing::Ray ray = generate_camera_ray(
-						x, y, m_Width, m_Height, camera, cam_transform, m_FrameCount);
+						x, y, m_Width, m_Height, camera, cam_transform, m_FrameCount, seed);
 
 					// Trace and accumulate.
 					Vector3 light = trace_ray(ray, 0, seed);
@@ -203,7 +223,6 @@ namespace me::systems {
 					};
 
 					// ---- Tonemapping (ACES Filmic) ----
-					float exposure = 0.6f;
 					avg.x *= exposure;
 					avg.y *= exposure;
 					avg.z *= exposure;
@@ -242,7 +261,7 @@ namespace me::systems {
 		int x, int y, int width, int height,
 		const me::components::CameraComponent& camera,
 		const me::components::TransformComponent& cam_transform,
-		uint32_t frame_count) {
+		uint32_t frame_count, uint32_t& seed) {
 
 		// Halton(base-2) for X, Halton(base-3) for Y.
 		// frame_count starts at 1, so we never evaluate the degenerate (0, 0)
@@ -267,13 +286,29 @@ namespace me::systems {
 		Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, up));
 		Vector3 true_up = Vector3CrossProduct(right, fwd);
 
-		Vector3 dir = {
+		Vector3 dir = Vector3Normalize({
 			fwd.x + right.x * vx + true_up.x * vy,
 			fwd.y + right.y * vx + true_up.y * vy,
 			fwd.z + right.z * vx + true_up.z * vy
-		};
+		});
 
-		return { cam_transform.position, Vector3Normalize(dir) };
+		// Pinhole camera unless an aperture is set.
+		if (aperture <= 0.0f)
+			return { cam_transform.position, dir };
+
+		// Depth of field: jitter the ray origin over a lens disk and re-aim it at the
+		// focal plane, so points off that plane blur. Accumulation averages it into bokeh.
+		// The lens sample MUST be per-pixel (random_float(seed)) — using a per-frame
+		// value would render every pixel through the same lens point each frame, making
+		// the whole image lurch around between frames instead of blurring smoothly.
+		Vector3 focal_point = Vector3Add(cam_transform.position, Vector3Scale(dir, focus_distance));
+		float lens_r = aperture * std::sqrt(me::raytracing::random_float(seed));
+		float lens_a = 2.0f * PI * me::raytracing::random_float(seed);
+		Vector3 lens_offset = Vector3Add(
+			Vector3Scale(right, std::cos(lens_a) * lens_r),
+			Vector3Scale(true_up, std::sin(lens_a) * lens_r));
+		Vector3 new_origin = Vector3Add(cam_transform.position, lens_offset);
+		return { new_origin, Vector3Normalize(Vector3Subtract(focal_point, new_origin)) };
 	}
 
 	Vector3 RaytracerSystem::sky_color(const Vector3& dir) const {
@@ -285,6 +320,48 @@ namespace me::systems {
 			((1.0f - t) * sky_horizon_color.y + t * sky_zenith_color.y) * sky_intensity,
 			((1.0f - t) * sky_horizon_color.z + t * sky_zenith_color.z) * sky_intensity
 		};
+	}
+
+	Vector3 RaytracerSystem::shadow_transmittance(const Vector3& origin, const Vector3& dir, float max_t) {
+		Vector3 trans = { 1.0f, 1.0f, 1.0f };
+		Vector3 o = origin;
+		float remaining = max_t;
+
+		// Walks the ray surface-by-surface: an opaque hit blocks fully (returns 0);
+		// each glass interface loses light to Fresnel reflection (grazing rays
+		// reflect away → the rim of a glass shadow darkens, even for clear glass);
+		// each interior segment absorbs by Beer–Lambert, exp(-σ·d) == pow(color, d),
+		// so tinted glass shadows scale with thickness. Mirrors the GPU backend.
+		for (int k = 0; k < 8; ++k) {
+			Vector3 inv = {
+				1.0f / (std::abs(dir.x) > 1e-8f ? dir.x : 1e-8f),
+				1.0f / (std::abs(dir.y) > 1e-8f ? dir.y : 1e-8f),
+				1.0f / (std::abs(dir.z) > 1e-8f ? dir.z : 1e-8f)
+			};
+			auto hit = m_BVH.traverse(o, dir, inv, remaining, *m_ActiveRegistry);
+			if (!hit) break; // nothing more in the way → the light is reached
+
+			if (hit->transmission <= 0.0f) return { 0.0f, 0.0f, 0.0f }; // opaque blocker
+
+			// Fresnel loss at the interface (Schlick r0 is symmetric in ior vs 1/ior).
+			float cos_i = std::abs(Vector3DotProduct(dir, hit->normal));
+			float f = 1.0f - me::raytracing::reflectance(cos_i, hit->ior);
+			trans.x *= f; trans.y *= f; trans.z *= f;
+
+			// A back-face hit means the segment just crossed was inside the glass.
+			if (!hit->front_face) {
+				trans.x *= std::pow(std::max(hit->base_color.x, 0.001f), hit->hit_distance);
+				trans.y *= std::pow(std::max(hit->base_color.y, 0.001f), hit->hit_distance);
+				trans.z *= std::pow(std::max(hit->base_color.z, 0.001f), hit->hit_distance);
+			}
+
+			if (std::max({ trans.x, trans.y, trans.z }) < 0.01f) return { 0.0f, 0.0f, 0.0f };
+
+			remaining -= (hit->hit_distance + 0.001f);
+			if (remaining <= 0.001f) break;
+			o = Vector3Add(hit->hit_point, Vector3Scale(dir, 0.001f));
+		}
+		return trans;
 	}
 
 	Vector3 RaytracerSystem::trace_ray(const me::raytracing::Ray& ray, int depth, uint32_t& seed, bool allow_emissive) {
@@ -325,7 +402,7 @@ namespace me::systems {
 		// ==========================================
 		Vector3 direct = { 0.0f, 0.0f, 0.0f };
 
-		// ---- Point lights ----
+		// ---- Point lights: sample a disk of `radius` for soft shadows; 1/d² falloff ----
 		auto& light_pool = m_ActiveRegistry->view<me::components::LightComponent>();
 		for (size_t i = 0; i < light_pool.size(); ++i) {
 			auto* lt = m_ActiveRegistry->try_get_component<me::components::TransformComponent>(
@@ -340,26 +417,35 @@ namespace me::systems {
 				std::pow(l.color.b / 255.0f, 2.2f)
 			};
 
-			Vector3 lvec = Vector3Subtract(lt->position, p.hit_point);
+			Vector3 to_l = Vector3Subtract(lt->position, shadow_origin);
+			float   center_dist = Vector3Length(to_l);
+			if (center_dist < 1e-4f) continue;
+			Vector3 ldir_c = Vector3Scale(to_l, 1.0f / center_dist);
+
+			// Sample a point on a disk of radius l.radius facing the receiver.
+			Vector3 a = (std::abs(ldir_c.x) > 0.9f) ? Vector3{ 0.0f, 1.0f, 0.0f } : Vector3{ 1.0f, 0.0f, 0.0f };
+			Vector3 u = Vector3Normalize(Vector3CrossProduct(ldir_c, a));
+			Vector3 vv = Vector3CrossProduct(ldir_c, u);
+			float   rr = l.radius * std::sqrt(random_float(seed));
+			float   phi = 2.0f * PI * random_float(seed);
+			Vector3 sample_pos = Vector3Add(lt->position,
+				Vector3Add(Vector3Scale(u, std::cos(phi) * rr), Vector3Scale(vv, std::sin(phi) * rr)));
+
+			Vector3 lvec = Vector3Subtract(sample_pos, shadow_origin);
 			float   ldist = Vector3Length(lvec);
-			Vector3 ldir = { lvec.x / ldist, lvec.y / ldist, lvec.z / ldist };
+			Vector3 ldir = Vector3Scale(lvec, 1.0f / ldist);
+			float   ndotl = std::max(0.0f, Vector3DotProduct(p.normal, ldir));
+			if (ndotl <= 0.0f) continue;
 
-			Vector3 sinv = {
-				1.0f / (std::abs(ldir.x) > 1e-8f ? ldir.x : 1e-8f),
-				1.0f / (std::abs(ldir.y) > 1e-8f ? ldir.y : 1e-8f),
-				1.0f / (std::abs(ldir.z) > 1e-8f ? ldir.z : 1e-8f)
-			};
-
-			bool in_shadow = m_BVH.traverse(shadow_origin, ldir, sinv, ldist, *m_ActiveRegistry).has_value();
-			if (!in_shadow) {
-				float ndotl = std::max(0.0f, Vector3DotProduct(p.normal, ldir));
-				direct.x += ndotl * lcolor.x * l.intensity;
-				direct.y += ndotl * lcolor.y * l.intensity;
-				direct.z += ndotl * lcolor.z * l.intensity;
-			}
+			Vector3 vis = shadow_transmittance(shadow_origin, ldir, ldist);
+			float   falloff = 1.0f / std::max(ldist * ldist, 1e-4f);
+			float   w = ndotl * l.intensity * falloff;
+			direct.x += vis.x * lcolor.x * w;
+			direct.y += vis.y * lcolor.y * w;
+			direct.z += vis.z * lcolor.z * w;
 		}
 
-		// ---- Directional lights ----
+		// ---- Directional lights: cone-sample within `angular_radius` for soft shadows ----
 		auto& dir_pool = m_ActiveRegistry->view<me::components::DirectionalLightComponent>();
 		for (size_t i = 0; i < dir_pool.size(); ++i) {
 			auto* lt = m_ActiveRegistry->try_get_component<me::components::TransformComponent>(
@@ -378,21 +464,17 @@ namespace me::systems {
 			float   yaw = lt->rotation.y * DEG2RAD;
 			Vector3 fwd = Vector3Normalize({
 				std::cos(pitch) * std::sin(yaw), -std::sin(pitch), std::cos(pitch) * std::cos(yaw) });
-			Vector3 ldir = { -fwd.x, -fwd.y, -fwd.z };
+			Vector3 ldir_base = { -fwd.x, -fwd.y, -fwd.z };
 
-			Vector3 sinv = {
-				1.0f / (std::abs(ldir.x) > 1e-8f ? ldir.x : 1e-8f),
-				1.0f / (std::abs(ldir.y) > 1e-8f ? ldir.y : 1e-8f),
-				1.0f / (std::abs(ldir.z) > 1e-8f ? ldir.z : 1e-8f)
-			};
+			float   cos_max = std::cos(dl.angular_radius * DEG2RAD);
+			Vector3 ldir = sample_cone(ldir_base, cos_max, seed);
+			float   ndotl = std::max(0.0f, Vector3DotProduct(p.normal, ldir));
+			if (ndotl <= 0.0f) continue;
 
-			bool in_shadow = m_BVH.traverse(shadow_origin, ldir, sinv, FLT_MAX, *m_ActiveRegistry).has_value();
-			if (!in_shadow) {
-				float ndotl = std::max(0.0f, Vector3DotProduct(p.normal, ldir));
-				direct.x += ndotl * lcolor.x * dl.intensity;
-				direct.y += ndotl * lcolor.y * dl.intensity;
-				direct.z += ndotl * lcolor.z * dl.intensity;
-			}
+			Vector3 vis = shadow_transmittance(shadow_origin, ldir, FLT_MAX);
+			direct.x += vis.x * lcolor.x * (ndotl * dl.intensity);
+			direct.y += vis.y * lcolor.y * (ndotl * dl.intensity);
+			direct.z += vis.z * lcolor.z * (ndotl * dl.intensity);
 		}
 
 		// ---- Emissive area lights (Next Event Estimation) ----
@@ -406,34 +488,29 @@ namespace me::systems {
 			Vector3 lvec = Vector3Subtract(em.position, shadow_origin);
 			float   dist = Vector3Length(lvec);
 			if (dist < 1e-4f) continue;
-			Vector3 ldir = { lvec.x / dist, lvec.y / dist, lvec.z / dist };
-
-			float ndotl = std::max(0.0f, Vector3DotProduct(p.normal, ldir));
-			if (ndotl <= 0.0f) continue;
+			Vector3 ldir_c = Vector3Scale(lvec, 1.0f / dist);
 
 			// Solid angle subtended by a sphere of radius R seen from `dist`.
 			float sin2 = std::min((em.radius * em.radius) / (dist * dist), 0.9999f);
 			float cos_max = std::sqrt(1.0f - sin2);
 			float omega = 2.0f * PI * (1.0f - cos_max);
 
-			// Stop the shadow ray just before the emitter's near surface so the
-			// emitter sphere doesn't register as an occluder of itself.
-			float shadow_max = dist - em.radius - 0.001f;
-			bool visible = true;
-			if (shadow_max > 0.001f) {
-				Vector3 sinv = {
-					1.0f / (std::abs(ldir.x) > 1e-8f ? ldir.x : 1e-8f),
-					1.0f / (std::abs(ldir.y) > 1e-8f ? ldir.y : 1e-8f),
-					1.0f / (std::abs(ldir.z) > 1e-8f ? ldir.z : 1e-8f)
-				};
-				visible = !m_BVH.traverse(shadow_origin, ldir, sinv, shadow_max, *m_ActiveRegistry).has_value();
-			}
-			if (visible) {
-				float w = ndotl * omega * INV_PI;
-				direct.x += em.emission.x * w;
-				direct.y += em.emission.y * w;
-				direct.z += em.emission.z * w;
-			}
+			// Aim the shadow ray at a random point inside the emitter's cone (instead
+			// of dead-center) so the penumbra softens as samples accumulate.
+			Vector3 ldir = sample_cone(ldir_c, cos_max, seed);
+			float   ndotl = std::max(0.0f, Vector3DotProduct(p.normal, ldir));
+			if (ndotl <= 0.0f) continue;
+
+			// Stop the shadow ray just before the emitter's near surface so it
+			// doesn't register as an occluder of itself.
+			float   shadow_max = dist - em.radius - 0.001f;
+			Vector3 vis = { 1.0f, 1.0f, 1.0f };
+			if (shadow_max > 0.001f) vis = shadow_transmittance(shadow_origin, ldir, shadow_max);
+
+			float w = ndotl * omega * INV_PI;
+			direct.x += vis.x * em.emission.x * w;
+			direct.y += vis.y * em.emission.y * w;
+			direct.z += vis.z * em.emission.z * w;
 		}
 
 		// Direct light is purely diffuse. Metals have no diffuse properties!
@@ -531,7 +608,17 @@ namespace me::systems {
 		// ---- Combine bounce contribution ----
 		Vector3 bounce = { 0.0f, 0.0f, 0.0f };
 		if (p.transmission > 0.0f) {
-			bounce = { bounce_color.x * p.base_color.x, bounce_color.y * p.base_color.y, bounce_color.z * p.base_color.z };
+			// Beer–Lambert: tint accrues only while traveling INSIDE the glass (a
+			// back-face hit means the segment just crossed was interior), so thick
+			// tinted glass looks denser than thin. Entry hits add no tint — their
+			// energy split is already handled by the Fresnel reflect/refract above.
+			Vector3 absorb = { 1.0f, 1.0f, 1.0f };
+			if (!p.front_face) {
+				absorb.x = std::pow(std::max(p.base_color.x, 0.001f), p.hit_distance);
+				absorb.y = std::pow(std::max(p.base_color.y, 0.001f), p.hit_distance);
+				absorb.z = std::pow(std::max(p.base_color.z, 0.001f), p.hit_distance);
+			}
+			bounce = { bounce_color.x * absorb.x, bounce_color.y * absorb.y, bounce_color.z * absorb.z };
 		} else {
 			float sw = 1.0f - p.roughness;
 			float dw = p.roughness;
@@ -718,6 +805,7 @@ namespace me::systems {
 			auto& l = light_pool.components[i];
 			me::render::gpu::GPUPointLight gl{};
 			gl.position = lt->position;
+			gl.radius = l.radius;
 			gl.color = { std::pow(l.color.r / 255.0f, 2.2f), std::pow(l.color.g / 255.0f, 2.2f), std::pow(l.color.b / 255.0f, 2.2f) };
 			gl.intensity = l.intensity;
 			m_GPUPointLights.push_back(gl);
@@ -733,6 +821,7 @@ namespace me::systems {
 			Vector3 fwd = Vector3Normalize({ std::cos(pitch) * std::sin(yaw), -std::sin(pitch), std::cos(pitch) * std::cos(yaw) });
 			me::render::gpu::GPUDirLight gd{};
 			gd.direction = { -fwd.x, -fwd.y, -fwd.z }; // TOWARD the light
+			gd.cos_angular = std::cos(dl.angular_radius * DEG2RAD);
 			gd.color = { std::pow(dl.color.r / 255.0f, 2.2f), std::pow(dl.color.g / 255.0f, 2.2f), std::pow(dl.color.b / 255.0f, 2.2f) };
 			gd.intensity = dl.intensity;
 			m_GPUDirLights.push_back(gd);
@@ -868,6 +957,14 @@ namespace me::systems {
 		rlSetUniform(loc_sky_h, &sky_horizon_color, RL_SHADER_UNIFORM_VEC3, 1);
 		rlSetUniform(loc_sky_z, &sky_zenith_color, RL_SHADER_UNIFORM_VEC3, 1);
 		rlSetUniform(loc_sky_i, &sky_intensity, RL_SHADER_UNIFORM_FLOAT, 1);
+
+		// Camera / lens uniforms (tonemap exposure + depth of field).
+		int loc_exposure = rlGetLocationUniform(m_ComputeShaderProgram, "exposure");
+		int loc_aperture = rlGetLocationUniform(m_ComputeShaderProgram, "aperture");
+		int loc_focus = rlGetLocationUniform(m_ComputeShaderProgram, "focus_distance");
+		rlSetUniform(loc_exposure, &exposure, RL_SHADER_UNIFORM_FLOAT, 1);
+		rlSetUniform(loc_aperture, &aperture, RL_SHADER_UNIFORM_FLOAT, 1);
+		rlSetUniform(loc_focus, &focus_distance, RL_SHADER_UNIFORM_FLOAT, 1);
 
 		// 3. Bind the Output Texture
 		// We tell OpenGL: "Take m_OutputTexture, and let the Compute Shader write directly into its memory!"

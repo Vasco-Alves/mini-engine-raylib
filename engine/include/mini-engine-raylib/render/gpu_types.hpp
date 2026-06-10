@@ -49,7 +49,7 @@ namespace me::render::gpu {
 	// 5. Point light (position + color + intensity)
 	struct GPUPointLight {
 		Vector3 position;
-		float   pad0;
+		float   radius;    // world-space light size → soft shadows
 		Vector3 color;     // linear-space
 		float   intensity;
 	};
@@ -57,7 +57,7 @@ namespace me::render::gpu {
 	// 6. Directional light (direction is TOWARD the light, pre-computed on CPU)
 	struct GPUDirLight {
 		Vector3 direction; // normalized, toward light
-		float   pad0;
+		float   cos_angular; // cos(half-angle) of the light's angular size → soft shadows
 		Vector3 color;     // linear-space
 		float   intensity;
 	};

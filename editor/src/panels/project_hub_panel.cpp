@@ -5,6 +5,7 @@
 #include <rlImGui.h>
 #include <mini-engine-raylib/core/file_system.hpp>
 #include <algorithm>
+#include <cstdio>
 
 namespace editor {
 

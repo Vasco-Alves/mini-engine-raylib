@@ -167,21 +167,23 @@ namespace me::ecs {
 			// Point Light
 			r.push_back(meta<LightComponent>("Light",
 				[](const LightComponent& c) {
-					json j; write_color(j, c.color); j["intensity"] = c.intensity; return j;
+					json j; write_color(j, c.color); j["intensity"] = c.intensity; j["radius"] = c.radius; return j;
 				},
 				[](LightComponent& c, const json& j) {
 					c.color = read_color(j);
 					c.intensity = j.value("intensity", 1.0f);
+					c.radius = j.value("radius", 0.1f);
 				}));
 
 			// Directional Light
 			r.push_back(meta<DirectionalLightComponent>("DirectionalLight",
 				[](const DirectionalLightComponent& c) {
-					json j; write_color(j, c.color); j["intensity"] = c.intensity; return j;
+					json j; write_color(j, c.color); j["intensity"] = c.intensity; j["angular_radius"] = c.angular_radius; return j;
 				},
 				[](DirectionalLightComponent& c, const json& j) {
 					c.color = read_color(j);
 					c.intensity = j.value("intensity", 1.0f);
+					c.angular_radius = j.value("angular_radius", 1.0f);
 				}));
 
 			// Camera3D

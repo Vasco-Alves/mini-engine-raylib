@@ -76,6 +76,11 @@ namespace me::systems {
 			sky_intensity = DEFAULT_SKY_INTENSITY;
 		}
 
+		// --- Camera / Tonemap (shared by both backends) ---
+		float exposure = 0.6f;        // tonemap brightness before the ACES curve
+		float aperture = 0.0f;        // lens radius for depth of field; 0 = pinhole (all sharp)
+		float focus_distance = 10.0f; // distance to the in-focus plane
+
 		// --- Export Settings ---
 		int export_width = 1920;
 		int export_height = 1080;
@@ -89,12 +94,16 @@ namespace me::systems {
 		// Event Estimation at the previous shading point), avoiding double-counting.
 		Vector3 trace_ray(const me::raytracing::Ray& ray, int depth, uint32_t& seed, bool allow_emissive = true);
 
+		// Visibility along a shadow ray: colored transmittance reaching the light
+		// (zero if an opaque surface blocks it; tinted by any glass it crosses).
+		Vector3 shadow_transmittance(const Vector3& origin, const Vector3& dir, float max_t);
+
 		// Evaluates the art-directable sky gradient (horizon -> zenith -> intensity).
 		// Used both as the background for escaping rays and as the ambient source.
 		// dir must be unit length.
 		Vector3 sky_color(const Vector3& dir) const;
 
-		me::raytracing::Ray generate_camera_ray(int x, int y, int width, int height, const me::components::CameraComponent& camera, const me::components::TransformComponent& cam_transform, uint32_t frame_count);
+		me::raytracing::Ray generate_camera_ray(int x, int y, int width, int height, const me::components::CameraComponent& camera, const me::components::TransformComponent& cam_transform, uint32_t frame_count, uint32_t& seed);
 
 	private:
 		int m_Width = 0;

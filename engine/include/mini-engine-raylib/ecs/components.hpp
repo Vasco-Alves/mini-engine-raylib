@@ -53,11 +53,13 @@ namespace me::components {
 	struct LightComponent {
 		me::Color color = me::Color::white;
 		float intensity = 1.0f;
+		float radius = 0.1f; // world-space size of the light; drives soft-shadow penumbra (0 = hard)
 	};
 
 	struct DirectionalLightComponent {
 		me::Color color = me::Color::white;
 		float intensity = 1.0f;
+		float angular_radius = 1.0f; // sun half-angle in DEGREES; drives soft-shadow penumbra (0 = hard)
 	};
 
 	struct CameraComponent {

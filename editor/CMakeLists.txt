@@ -1,9 +1,19 @@
 project(editor CXX)
 
-# Find all .cpp files in the editor source folder
-file(GLOB_RECURSE EDITOR_SOURCES "src/*.cpp")
-
-list(APPEND EDITOR_SOURCES "${CMAKE_SOURCE_DIR}/vendor/imguizmo/ImGuizmo.cpp")
+# Explicit source list — preferred over file(GLOB), which doesn't re-run when a new
+# file is added (so a new .cpp would be silently skipped until the next re-configure).
+set(EDITOR_SOURCES
+    "src/main.cpp"
+    "src/core/editor_app.cpp"
+    "src/panels/console_panel.cpp"
+    "src/panels/content_browser_panel.cpp"
+    "src/panels/inspector_panel.cpp"
+    "src/panels/project_hub_panel.cpp"
+    "src/panels/scene_hierarchy_panel.cpp"
+    "src/panels/viewport_panel.cpp"
+    "src/utils/file_dialogs.cpp"
+    "${CMAKE_SOURCE_DIR}/vendor/imguizmo/ImGuizmo.cpp"
+)
 
 add_executable(editor ${EDITOR_SOURCES})
 

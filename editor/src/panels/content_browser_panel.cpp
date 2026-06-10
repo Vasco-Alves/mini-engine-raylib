@@ -10,6 +10,7 @@
 #include <mini-ecs/registry.hpp>
 #include <imgui.h>
 #include <algorithm>
+#include <cstdio>
 
 namespace editor {
 

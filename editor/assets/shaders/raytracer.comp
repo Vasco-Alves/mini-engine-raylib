@@ -24,11 +24,11 @@ struct GPUPrimitive {
     mat4 normal_matrix;
 };
 struct GPUPointLight {
-    vec3 position; float pad0;
+    vec3 position; float radius;     // world-space light size → soft shadows
     vec3 color;    float intensity;
 };
 struct GPUDirLight {
-    vec3 direction; float pad0; // direction TOWARD the light
+    vec3 direction; float cos_angular; // direction TOWARD the light; cos(half-angle)
     vec3 color;     float intensity;
 };
 struct GPUEmitter {
@@ -68,6 +68,11 @@ uniform vec3  sky_horizon;
 uniform vec3  sky_zenith;
 uniform float sky_intensity;
 
+// --- Camera / lens ---
+uniform float exposure;       // tonemap brightness
+uniform float aperture;       // lens radius for depth of field (0 = pinhole)
+uniform float focus_distance; // distance to the focal plane
+
 const float PI     = 3.14159265359;
 const float INV_PI = 0.31830988618;
 
@@ -99,6 +104,19 @@ float halton(uint index, uint base) {
     float f = 1.0, r = 0.0;
     while (index > 0u) { f /= float(base); r += f * float(index % base); index /= base; }
     return r;
+}
+// Uniformly samples a direction within the cone of half-angle acos(cos_max) around
+// `dir`. cos_max == 1 returns `dir` exactly (a hard, point-like sample); a smaller
+// cos_max widens the cone, softening shadows as samples accumulate over frames.
+vec3 sample_cone(vec3 dir, float cos_max, inout uint seed) {
+    float r1 = random_float(seed), r2 = random_float(seed);
+    float cos_t = 1.0 - r1 * (1.0 - cos_max);
+    float sin_t = sqrt(max(0.0, 1.0 - cos_t * cos_t));
+    float phi = 2.0 * PI * r2;
+    vec3 a = abs(dir.x) > 0.9 ? vec3(0,1,0) : vec3(1,0,0);
+    vec3 u = normalize(cross(dir, a));
+    vec3 v = cross(dir, u);
+    return normalize(u * cos(phi) * sin_t + v * sin(phi) * sin_t + dir * cos_t);
 }
 
 // ============================================================================
@@ -269,96 +287,108 @@ bool traverse_scene(Ray ray, out HitInfo hit) {
 }
 
 // ============================================================================
-// SHADOW TRAVERSAL — early-exit bool, no HitInfo allocation
+// SHADOW TRAVERSAL — colored transmittance toward the light.
+// Walks the ray surface-by-surface: an opaque hit blocks fully (returns 0);
+// each glass interface loses light to Fresnel reflection (grazing rays reflect
+// away → the rim of a glass shadow darkens, even for clear glass); each interior
+// segment absorbs by Beer–Lambert, exp(-σ·d) == pow(base_color, d), so tinted
+// glass shadows scale with thickness.
 // ============================================================================
-bool shadow_test(vec3 origin, vec3 dir, float max_t) {
-    vec3 inv_dir = safe_inv_dir(dir);
-    int stack[64]; int top=0; stack[top++]=0;
-    bool blocked = false;
+vec3 shadow_transmittance(vec3 origin, vec3 dir, float max_t) {
+    vec3 trans = vec3(1.0);
+    vec3 o = origin;
+    float remaining = max_t;
 
-    while (top > 0 && !blocked) {
-        GPUNode node = bvh_nodes[stack[--top]];
-        if (intersect_aabb(origin, inv_dir, node.bounds_min, node.bounds_max, max_t) >= 1e37) continue;
+    for (int k = 0; k < 8; k++) {
+        Ray r; r.origin = o; r.direction = dir;
+        HitInfo h;
+        if (!traverse_scene(r, h)) break;   // nothing else in the way
+        if (h.t >= remaining) break;        // next surface is beyond the light
 
-        if (node.count > 0u) {
-            for (uint pi=node.left_child; pi<node.left_child+node.count && !blocked; pi++) {
-                GPUPrimitive prim = primitives[pi];
-                float t; vec3 n_dummy;
+        GPUMaterial om = materials[h.mat_index];
+        if (om.transmission <= 0.0) return vec3(0.0); // opaque: fully blocked
 
-                if (prim.type == 0) {
-                    Ray r; r.origin=origin; r.direction=dir;
-                    if (intersect_sphere(r, prim.inverse_model, prim.normal_matrix, t, n_dummy) && t < max_t) blocked=true;
-                } else if (prim.type == 1) {
-                    Ray r; r.origin=origin; r.direction=dir;
-                    if (intersect_plane(r, prim.inverse_model, prim.normal_matrix, t, n_dummy) && t < max_t) blocked=true;
-                } else if (prim.type == 2) {
-                    Ray r; r.origin=origin; r.direction=dir;
-                    if (intersect_cube(r, prim.inverse_model, prim.normal_matrix, t, n_dummy) && t < max_t) blocked=true;
-                } else if (prim.type == 3 && prim.blas_root_index >= 0) {
-                    vec3 lo = rl_transform_point(prim.inverse_model, origin);
-                    vec3 ld = normalize(rl_transform_dir(prim.inverse_model, dir));
-                    float local_t; vec3 ln;
-                    if (traverse_blas(lo, ld, prim.blas_root_index, local_t, ln)) {
-                        vec3 wh = rl_transform_point(inverse(prim.inverse_model), lo + ld*local_t);
-                        if (length(wh - origin) < max_t) blocked = true;
-                    }
-                }
-            }
-        } else { stack[top++]=int(node.left_child); stack[top++]=int(node.left_child)+1; }
+        // Fresnel loss at the interface (Schlick r0 is symmetric in ior vs 1/ior).
+        float cos_i = abs(dot(dir, h.normal));
+        trans *= 1.0 - schlick(cos_i, om.ior);
+
+        // A back-face hit means the segment just crossed was inside the glass.
+        if (!h.front_face)
+            trans *= pow(max(om.base_color, vec3(0.001)), vec3(h.t));
+
+        if (max(trans.r, max(trans.g, trans.b)) < 0.01) return vec3(0.0);
+
+        o += dir * (h.t + 0.001);
+        remaining -= (h.t + 0.001);
+        if (remaining <= 0.001) break;
     }
-    return blocked;
+    return trans;
 }
 
 // ============================================================================
-// DIRECT LIGHTING  (mirrors CPU trace_ray direct pass exactly)
+// DIRECT LIGHTING (Next Event Estimation with soft shadows; mirrors the CPU pass)
 // ============================================================================
-vec3 compute_direct(vec3 shadow_origin, vec3 normal) {
+vec3 compute_direct(vec3 shadow_origin, vec3 normal, inout uint seed) {
     vec3 direct = vec3(0.0);
 
+    // Point lights: sample a disk of `radius` → soft shadows; inverse-square falloff.
     for (int i = 0; i < num_point_lights; i++) {
         GPUPointLight l = point_lights[i];
-        vec3  lvec  = l.position - shadow_origin;
+        vec3  to_l = l.position - shadow_origin;
+        float center_dist = length(to_l);
+        if (center_dist < 1e-4) continue;
+        vec3  ldir_c = to_l / center_dist;
+
+        vec3 a = abs(ldir_c.x) > 0.9 ? vec3(0,1,0) : vec3(1,0,0);
+        vec3 u = normalize(cross(ldir_c, a));
+        vec3 v = cross(ldir_c, u);
+        float rr  = l.radius * sqrt(random_float(seed));
+        float phi = 2.0 * PI * random_float(seed);
+        vec3 sample_pos = l.position + (u * cos(phi) + v * sin(phi)) * rr;
+
+        vec3  lvec  = sample_pos - shadow_origin;
         float ldist = length(lvec);
         vec3  ldir  = lvec / ldist;
-        if (!shadow_test(shadow_origin, ldir, ldist)) {
-            float ndotl = max(0.0, dot(normal, ldir));
-            direct += ndotl * l.color * l.intensity;
-        }
+        float ndotl = max(0.0, dot(normal, ldir));
+        if (ndotl <= 0.0) continue;
+
+        vec3  vis = shadow_transmittance(shadow_origin, ldir, ldist);
+        float falloff = 1.0 / max(ldist * ldist, 1e-4);
+        direct += vis * ndotl * l.color * l.intensity * falloff;
     }
 
+    // Directional lights: cone-sample within the angular radius → soft shadows.
     for (int i = 0; i < num_dir_lights; i++) {
         GPUDirLight dl = dir_lights[i];
-        if (!shadow_test(shadow_origin, dl.direction, 1e38)) {
-            float ndotl = max(0.0, dot(normal, dl.direction));
-            direct += ndotl * dl.color * dl.intensity;
-        }
+        vec3 ldir = sample_cone(dl.direction, dl.cos_angular, seed);
+        float ndotl = max(0.0, dot(normal, ldir));
+        if (ndotl <= 0.0) continue;
+        vec3 vis = shadow_transmittance(shadow_origin, ldir, 1e38);
+        direct += vis * ndotl * dl.color * dl.intensity;
     }
 
-    // --- Emissive area lights (Next Event Estimation) ---
-    // Each emitter is a sphere light sampled deterministically at its center, so
-    // it adds illumination with NO extra noise. The solid angle of its bounding
-    // sphere gives a plausible size/distance falloff. Mirrors the CPU backend.
+    // Emissive area lights (NEE): cone-sample the emitter sphere → soft shadows.
     for (int i = 0; i < num_emitters; i++) {
         GPUEmitter em = emitters[i];
         vec3  lvec = em.position - shadow_origin;
         float dist = length(lvec);
         if (dist < 1e-4) continue;
-        vec3  ldir = lvec / dist;
-
-        float ndotl = max(0.0, dot(normal, ldir));
-        if (ndotl <= 0.0) continue;
+        vec3  ldir_c = lvec / dist;
 
         float sin2    = min((em.radius * em.radius) / (dist * dist), 0.9999);
         float cos_max = sqrt(1.0 - sin2);
         float omega   = 2.0 * PI * (1.0 - cos_max);
 
-        // Stop the shadow ray before the emitter's near surface so it doesn't
-        // shadow itself.
-        float shadow_max = dist - em.radius - 0.001;
-        bool  visible = true;
-        if (shadow_max > 0.001) visible = !shadow_test(shadow_origin, ldir, shadow_max);
+        vec3 ldir = sample_cone(ldir_c, cos_max, seed);
+        float ndotl = max(0.0, dot(normal, ldir));
+        if (ndotl <= 0.0) continue;
 
-        if (visible) direct += em.emission * (ndotl * omega * INV_PI);
+        // Stop the shadow ray before the emitter's near surface so it doesn't shadow itself.
+        float shadow_max = dist - em.radius - 0.001;
+        vec3  vis = vec3(1.0);
+        if (shadow_max > 0.001) vis = shadow_transmittance(shadow_origin, ldir, shadow_max);
+
+        direct += vis * em.emission * (ndotl * omega * INV_PI);
     }
 
     return direct;
@@ -385,6 +415,18 @@ void main() {
     Ray ray;
     ray.origin    = cam_pos;
     ray.direction = normalize(cam_fwd + cam_right*(ndc_x*aspect*cam_fov_scale) + cam_up*(ndc_y*cam_fov_scale));
+
+    // Depth of field: jitter the origin over a lens disk and re-aim at the focal plane.
+    if (aperture > 0.0) {
+        vec3 focal_point = cam_pos + ray.direction * focus_distance;
+        // Per-pixel lens sample (not per-frame): otherwise every pixel shares one lens
+        // point each frame and the whole image lurches around instead of blurring.
+        float lens_r = aperture * sqrt(random_float(seed));
+        float lens_a = 2.0 * PI * random_float(seed);
+        vec3 lens_off = cam_right * (cos(lens_a) * lens_r) + cam_up * (sin(lens_a) * lens_r);
+        ray.origin = cam_pos + lens_off;
+        ray.direction = normalize(focal_point - ray.origin);
+    }
 
     vec3 final_color = vec3(0.0);
     vec3 throughput  = vec3(1.0);
@@ -436,11 +478,15 @@ void main() {
             float bias = dot(new_dir, hit.normal) < 0.0 ? -0.001 : 0.001;
             ray.origin    = hit_point + hit.normal*bias;
             ray.direction = normalize(new_dir);
-            throughput   *= mat.base_color;
+            // Beer–Lambert: tint accrues only while traveling INSIDE the glass
+            // (a back-face hit means the segment just crossed was interior), so
+            // thick tinted glass looks denser than thin tinted glass.
+            if (!hit.front_face)
+                throughput *= pow(max(mat.base_color, vec3(0.001)), vec3(hit.t));
             allow_emissive = true; // glass is specular: it may see emitters
         } else {
             // Opaque — direct lighting + ambient + scatter (mirrors CPU trace_ray)
-            vec3 direct = compute_direct(shadow_origin, hit.normal);
+            vec3 direct = compute_direct(shadow_origin, hit.normal, seed);
             direct *= mat.roughness * (1.0 - mat.metallic);
 
             vec3 ambient = sample_sky(hit.normal) * ambient_strength * mat.roughness;
@@ -467,7 +513,7 @@ void main() {
     }
 
     // ACES Filmic + gamma (matches CPU)
-    final_color *= 0.6;
+    final_color *= exposure;
     final_color  = (final_color*(2.51*final_color+0.03)) / (final_color*(2.43*final_color+0.59)+0.14);
     final_color  = sqrt(clamp(final_color, 0.0, 1.0));
 

@@ -8,6 +8,7 @@
 #include <fstream>
 #include <algorithm>
 #include <ctime>
+#include <cstdio>
 
 #include <mini-engine-raylib/core/engine.hpp>
 #include <mini-engine-raylib/core/vfs.hpp>
@@ -164,21 +165,39 @@ namespace editor {
 		// 1. Render the 3D World to the Viewport Texture
 		m_ViewportPanel.begin_render();
 
+		// Choose the viewport camera: the editor fly-cam while editing; the active
+		// scene CameraComponent while playing (falling back to the editor cam if the
+		// scene has none, so the view never goes black).
+		const me::components::TransformComponent* view_t = &m_EditorCameraTransform;
+		const me::components::CameraComponent*    view_c = &m_EditorCamera;
+		if (m_SceneState == SceneState::Play) {
+			auto& reg = me::get_registry();
+			auto& cam_pool = reg.view<me::components::CameraComponent>();
+			for (size_t i = 0; i < cam_pool.size(); ++i) {
+				if (!cam_pool.components[i].active) continue;
+				if (auto* t = reg.try_get_component<me::components::TransformComponent>(cam_pool.entity_map[i])) {
+					view_t = t;
+					view_c = &cam_pool.components[i];
+					break;
+				}
+			}
+		}
+
 		me::render::clear_world(me::Color{ 30, 30, 30, 255 });
-		me::render::render_world(&m_EditorCameraTransform, &m_EditorCamera);
+		me::render::render_world(view_t, view_c);
 
 		// --- Pack ECS data into a raw Raylib struct to draw the grid & gizmos ---
 		Camera3D gridCam = { 0 };
-		gridCam.position = { m_EditorCameraTransform.position.x, m_EditorCameraTransform.position.y, m_EditorCameraTransform.position.z };
-		gridCam.target = { m_EditorCamera.target.x, m_EditorCamera.target.y, m_EditorCamera.target.z };
-		gridCam.up = { m_EditorCamera.up.x, m_EditorCamera.up.y, m_EditorCamera.up.z };
-		gridCam.fovy = m_EditorCamera.fov;
-		gridCam.projection = CAMERA_PERSPECTIVE;
+		gridCam.position = { view_t->position.x, view_t->position.y, view_t->position.z };
+		gridCam.target = { view_c->target.x, view_c->target.y, view_c->target.z };
+		gridCam.up = { view_c->up.x, view_c->up.y, view_c->up.z };
+		gridCam.fovy = view_c->fov;
+		gridCam.projection = (view_c->projection == 1) ? CAMERA_ORTHOGRAPHIC : CAMERA_PERSPECTIVE;
 
 		BeginMode3D(gridCam);
 
-		// Draw the baseline editor grid
-		DrawGrid(100, 1.0f);
+		// Draw the baseline editor grid (edit mode only — keep the play view clean)
+		if (m_SceneState == SceneState::Edit) DrawGrid(100, 1.0f);
 
 		// ==========================================
 		// DRAW EDITOR GIZMOS (Lights, Cameras, etc.)
@@ -365,6 +384,23 @@ namespace editor {
 			// One-click escape hatch from a black-screen / over-tweaked state.
 			if (ImGui::SmallButton("Reset Environment")) {
 				m_Raytracer.reset_environment();
+				m_Raytracer.reset_accumulation();
+			}
+
+			// --- CAMERA / LENS ---
+			ImGui::Dummy(ImVec2(0, 6));
+			ImGui::Separator();
+			ImGui::TextDisabled("Camera");
+
+			// Tonemap exposure (overall brightness before the ACES curve).
+			if (ImGui::SliderFloat("Exposure", &m_Raytracer.exposure, 0.0f, 3.0f, "%.2f")) {
+				m_Raytracer.reset_accumulation();
+			}
+			// Depth of field: 0 aperture = pinhole (all sharp); larger = more blur.
+			if (ImGui::SliderFloat("Aperture (DoF)", &m_Raytracer.aperture, 0.0f, 0.5f, "%.3f")) {
+				m_Raytracer.reset_accumulation();
+			}
+			if (ImGui::SliderFloat("Focus Distance", &m_Raytracer.focus_distance, 0.1f, 100.0f, "%.2f")) {
 				m_Raytracer.reset_accumulation();
 			}
 
