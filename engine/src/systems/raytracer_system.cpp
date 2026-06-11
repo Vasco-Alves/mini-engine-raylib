@@ -877,28 +877,28 @@ namespace me::systems {
 		// 2. Load the new buffers into VRAM! 
 		// (RL_DYNAMIC_DRAW tells the GPU we might change this data frequently)
 		if (!m_GPUNodes.empty()) {
-			m_ssboNodes = rlLoadShaderBuffer(m_GPUNodes.size() * sizeof(me::render::gpu::GPUNode), m_GPUNodes.data(), RL_DYNAMIC_DRAW);
+			m_ssboNodes = rlLoadShaderBuffer(static_cast<unsigned int>(m_GPUNodes.size() * sizeof(me::render::gpu::GPUNode)), m_GPUNodes.data(), RL_DYNAMIC_DRAW);
 		} else {
 			me::render::gpu::GPUNode dummy{};
 			m_ssboNodes = rlLoadShaderBuffer(sizeof(dummy), &dummy, RL_DYNAMIC_DRAW);
 		}
 
 		if (!m_GPUTriangles.empty()) {
-			m_ssboTriangles = rlLoadShaderBuffer(m_GPUTriangles.size() * sizeof(me::render::gpu::GPUTriangle), m_GPUTriangles.data(), RL_DYNAMIC_DRAW);
+			m_ssboTriangles = rlLoadShaderBuffer(static_cast<unsigned int>(m_GPUTriangles.size() * sizeof(me::render::gpu::GPUTriangle)), m_GPUTriangles.data(), RL_DYNAMIC_DRAW);
 		} else {
 			me::render::gpu::GPUTriangle dummy{};
 			m_ssboTriangles = rlLoadShaderBuffer(sizeof(dummy), &dummy, RL_DYNAMIC_DRAW);
 		}
 
 		if (!m_GPUMaterials.empty()) {
-			m_ssboMaterials = rlLoadShaderBuffer(m_GPUMaterials.size() * sizeof(me::render::gpu::GPUMaterial), m_GPUMaterials.data(), RL_DYNAMIC_DRAW);
+			m_ssboMaterials = rlLoadShaderBuffer(static_cast<unsigned int>(m_GPUMaterials.size() * sizeof(me::render::gpu::GPUMaterial)), m_GPUMaterials.data(), RL_DYNAMIC_DRAW);
 		} else {
 			me::render::gpu::GPUMaterial dummy{};
 			m_ssboMaterials = rlLoadShaderBuffer(sizeof(dummy), &dummy, RL_DYNAMIC_DRAW);
 		}
 
 		if (!m_GPUPrimitives.empty()) {
-			m_ssboPrimitives = rlLoadShaderBuffer(m_GPUPrimitives.size() * sizeof(me::render::gpu::GPUPrimitive), m_GPUPrimitives.data(), RL_DYNAMIC_DRAW);
+			m_ssboPrimitives = rlLoadShaderBuffer(static_cast<unsigned int>(m_GPUPrimitives.size() * sizeof(me::render::gpu::GPUPrimitive)), m_GPUPrimitives.data(), RL_DYNAMIC_DRAW);
 		} else {
 			me::render::gpu::GPUPrimitive dummy{};
 			m_ssboPrimitives = rlLoadShaderBuffer(sizeof(dummy), &dummy, RL_DYNAMIC_DRAW);
@@ -906,7 +906,7 @@ namespace me::systems {
 
 		if (m_ssboPointLights != 0) rlUnloadShaderBuffer(m_ssboPointLights);
 		if (!m_GPUPointLights.empty()) {
-			m_ssboPointLights = rlLoadShaderBuffer(m_GPUPointLights.size() * sizeof(me::render::gpu::GPUPointLight), m_GPUPointLights.data(), RL_DYNAMIC_DRAW);
+			m_ssboPointLights = rlLoadShaderBuffer(static_cast<unsigned int>(m_GPUPointLights.size() * sizeof(me::render::gpu::GPUPointLight)), m_GPUPointLights.data(), RL_DYNAMIC_DRAW);
 		} else {
 			me::render::gpu::GPUPointLight dummy{};
 			m_ssboPointLights = rlLoadShaderBuffer(sizeof(dummy), &dummy, RL_DYNAMIC_DRAW);
@@ -914,7 +914,7 @@ namespace me::systems {
 
 		if (m_ssboDirLights != 0) rlUnloadShaderBuffer(m_ssboDirLights);
 		if (!m_GPUDirLights.empty()) {
-			m_ssboDirLights = rlLoadShaderBuffer(m_GPUDirLights.size() * sizeof(me::render::gpu::GPUDirLight), m_GPUDirLights.data(), RL_DYNAMIC_DRAW);
+			m_ssboDirLights = rlLoadShaderBuffer(static_cast<unsigned int>(m_GPUDirLights.size() * sizeof(me::render::gpu::GPUDirLight)), m_GPUDirLights.data(), RL_DYNAMIC_DRAW);
 		} else {
 			me::render::gpu::GPUDirLight dummy{};
 			m_ssboDirLights = rlLoadShaderBuffer(sizeof(dummy), &dummy, RL_DYNAMIC_DRAW);
@@ -922,7 +922,7 @@ namespace me::systems {
 
 		if (m_ssboEmitters != 0) rlUnloadShaderBuffer(m_ssboEmitters);
 		if (!m_GPUEmitters.empty()) {
-			m_ssboEmitters = rlLoadShaderBuffer(m_GPUEmitters.size() * sizeof(me::render::gpu::GPUEmitter), m_GPUEmitters.data(), RL_DYNAMIC_DRAW);
+			m_ssboEmitters = rlLoadShaderBuffer(static_cast<unsigned int>(m_GPUEmitters.size() * sizeof(me::render::gpu::GPUEmitter)), m_GPUEmitters.data(), RL_DYNAMIC_DRAW);
 		} else {
 			me::render::gpu::GPUEmitter dummy{};
 			m_ssboEmitters = rlLoadShaderBuffer(sizeof(dummy), &dummy, RL_DYNAMIC_DRAW);
@@ -1004,12 +1004,26 @@ namespace me::systems {
 		// We tell OpenGL: "Take m_OutputTexture, and let the Compute Shader write directly into its memory!"
 		rlBindImageTexture(m_OutputTexture.id, 0, m_OutputTexture.format, false);
 
-		// 4. DISPATCH THE THREADS!
-		// Our shader uses blocks of 8x8. So we divide our screen size by 8.
+		// 4. DISPATCH — in horizontal row bands, never one giant dispatch.
+		// A single full-image dispatch at export resolutions (with high bounce
+		// counts) can run longer than the OS GPU watchdog allows (~2s on
+		// Windows/TDR); the driver then resets and the GL context dies, which
+		// kills the app. Banding keeps each dispatch short and preemptible.
+		// The per-dispatch pixel budget shrinks as bounces rise, since the
+		// per-pixel cost scales with them. Viewport-sized images still fit in
+		// a single dispatch, so the interactive path is unchanged.
 		int group_x = (int)std::ceil(m_Width / 8.0f);
-		int group_y = (int)std::ceil(m_Height / 8.0f);
 
-		rlComputeShaderDispatch(group_x, group_y, 1);
+		const int budget_px = 2'000'000 / std::max(1, max_bounces);
+		int band_rows = std::max(1, budget_px / std::max(1, m_Width));
+		band_rows = std::max(8, (band_rows / 8) * 8); // align to the 8x8 workgroup
+
+		int loc_row_off = rlGetLocationUniform(m_ComputeShaderProgram, "row_offset");
+		for (int y = 0; y < m_Height; y += band_rows) {
+			int rows = std::min(band_rows, m_Height - y);
+			rlSetUniform(loc_row_off, &y, RL_SHADER_UNIFORM_INT, 1);
+			rlComputeShaderDispatch(group_x, (unsigned int)std::ceil(rows / 8.0f), 1);
+		}
 
 		rlDisableShader();
 	}

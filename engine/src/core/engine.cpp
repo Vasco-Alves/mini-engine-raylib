@@ -140,6 +140,7 @@ namespace me {
 	void set_playing(bool playing) { s_State.is_playing = playing; }
 	bool is_playing() { return s_State.is_playing; }
 	void close_application() { s_State.running = false; }
+	void set_target_fps(int fps) { SetTargetFPS(fps); }
 	int get_window_width() { return GetScreenWidth(); }
 	int get_window_height() { return GetScreenHeight(); }
 	void set_paused(bool paused) { s_State.is_paused = paused; }

@@ -25,6 +25,10 @@ namespace me {
 
 	void close_application();
 
+	// 0 = uncapped. Editors can relax the cap while path tracing (every frame
+	// is a sample) and restore it for normal UI work to spare the GPU.
+	void set_target_fps(int fps);
+
 	int get_window_width();
 	int get_window_height();
 

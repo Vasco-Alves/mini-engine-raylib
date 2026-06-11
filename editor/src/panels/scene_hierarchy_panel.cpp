@@ -3,7 +3,7 @@
 
 #include <imgui.h>
 #include <string>
-#include <cstring>
+#include <cstdio>
 #include <memory>
 #include <raylib.h>
 #include <raymath.h>
@@ -28,8 +28,7 @@ namespace editor {
 
 		auto* tag = m_Context->try_get_component<me::components::TagComponent>(entity);
 		std::string current = (tag && !tag->name.empty()) ? tag->name : ("Entity " + std::to_string(entity));
-		strncpy(m_RenameBuffer, current.c_str(), sizeof(m_RenameBuffer) - 1);
-		m_RenameBuffer[sizeof(m_RenameBuffer) - 1] = '\0';
+		snprintf(m_RenameBuffer, sizeof(m_RenameBuffer), "%s", current.c_str());
 	}
 
 	void SceneHierarchyPanel::on_imgui_render(editor::CommandHistory& command_history) {

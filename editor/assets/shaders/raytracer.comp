@@ -74,6 +74,9 @@ uniform float exposure;       // tonemap brightness
 uniform float aperture;       // lens radius for depth of field (0 = pinhole)
 uniform float focus_distance; // distance to the focal plane
 uniform float firefly_clamp;  // cap per-sample brightness (0 = off)
+uniform int   row_offset;     // first image row of this dispatch — the host splits
+                              // big frames into row bands so no single dispatch can
+                              // outlive the OS GPU watchdog (TDR) at export sizes
 
 const float PI     = 3.14159265359;
 const float INV_PI = 0.31830988618;
@@ -411,6 +414,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 void main() {
     ivec2 pixel_coords = ivec2(gl_GlobalInvocationID.xy);
+    pixel_coords.y += row_offset; // dispatches cover horizontal bands of the image
     ivec2 dims = imageSize(img_output);
     if (pixel_coords.x >= dims.x || pixel_coords.y >= dims.y) return;
 

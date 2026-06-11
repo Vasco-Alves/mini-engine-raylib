@@ -45,8 +45,13 @@ namespace editor {
 		void draw_menu_bar();
 		void draw_toolbar();
 		void draw_modals();
+		void draw_overlays();
 		void apply_theme();
 		void update_window_title();
+
+		// Caps the frame rate to the monitor refresh in Edit/Play (no point
+		// rendering the UI faster), uncaps it in Render (every frame = a sample).
+		void apply_frame_pacing();
 
 		// --- Entity Operations (undoable, shared by shortcuts and the Edit menu) ---
 		void delete_selected_entity();
@@ -63,8 +68,18 @@ namespace editor {
 		void new_scene();
 		void save_scene();
 		void open_save_as_modal();
+		void open_scene(const std::string& vfs_path);
 		void on_play();
 		void on_stop();
+
+		// --- Unsaved-changes guard ---
+		// request_* check m_SceneDirty first; if dirty they park the action and
+		// show the "Unsaved Changes" modal, which then calls perform_pending_action.
+		enum class PendingAction { None, NewScene, OpenScene, Exit };
+		void request_exit();
+		void request_new_scene();
+		void request_open_scene(const std::string& vfs_path);
+		void perform_pending_action();
 
 	private:
 		// --- State Variables ---
@@ -80,10 +95,17 @@ namespace editor {
 		// --- Modals ---
 		bool m_ShowNewSceneModal = false;
 		bool m_ShowSaveAsModal = false;
+		bool m_ShowUnsavedModal = false;
+		PendingAction m_PendingAction = PendingAction::None;
+		std::string m_PendingScenePath;
 
 		// --- Unsaved-changes marker (window title "*") ---
 		bool m_SceneDirty = false;
 		std::string m_LastWindowTitle;
+
+		// --- Overlays ---
+		bool m_ShowStats = false;        // View menu toggle: FPS / entities / samples
+		float m_FlySpeedToastTimer = 0.0f; // shows fly speed briefly after scrolling
 
 		// --- Export State Tracking ---
 		bool m_ShowExportModal = false;

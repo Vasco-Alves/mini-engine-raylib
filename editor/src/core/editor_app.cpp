@@ -51,6 +51,7 @@ namespace editor {
 
 		load_engine_config();
 		m_ViewportPanel.on_start();
+		apply_frame_pacing();
 
 		me::render::init();
 		me::physics::init();
@@ -76,9 +77,17 @@ namespace editor {
 		auto& bus = me::get_event_bus();
 		bus.subscribe<me::events::LogEvent>([](auto* e) { ConsolePanel::add_log(e->message, e->level); });
 		bus.subscribe<me::events::SceneLoadedEvent>([this](auto* e) {
+			// Every load rebuilds all entities under new ids, so the undo
+			// history (and the selection) can't survive the swap.
+			m_CommandHistory.Clear();
+			m_HierarchyPanel.set_selected_entity(me::entity::null);
 			if (e->filepath.find(".temp_play.json") == std::string::npos) {
 				m_CurrentScenePath = e->filepath;
+				m_SceneDirty = false; // freshly loaded == on-disk state
 			}
+			});
+		bus.subscribe<me::events::SceneOpenRequestEvent>([this](auto* e) {
+			request_open_scene(e->filepath);
 			});
 		bus.subscribe<me::events::EntitySelectedEvent>([this](auto* e) {
 			m_HierarchyPanel.set_selected_entity(e->entity_id);
@@ -97,17 +106,19 @@ namespace editor {
 
 	void EditorApp::on_update(float dt) {
 		if (me::input::action_pressed("Quit") && !ImGui::GetIO().WantCaptureKeyboard) {
-			me::close_application();
+			request_exit(); // prompts about unsaved changes instead of dropping them
 		}
 
 		if (!m_IsProjectLoaded) return;
+
+		if (m_FlySpeedToastTimer > 0.0f) m_FlySpeedToastTimer -= dt;
 
 		// OS-Level File Dropping
 		if (IsFileDropped()) {
 			FilePathList dropped_files = LoadDroppedFiles();
 			std::filesystem::path target_dir = m_BrowserPanel.get_current_directory();
 
-			for (int i = 0; i < dropped_files.count; i++) {
+			for (unsigned int i = 0; i < dropped_files.count; i++) {
 				try {
 					std::filesystem::copy(dropped_files.paths[i], target_dir / std::filesystem::path(dropped_files.paths[i]).filename(),
 						std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing);
@@ -131,6 +142,7 @@ namespace editor {
 			float wheel = GetMouseWheelMove();
 			if (wheel != 0.0f) {
 				m_EditorCamera.move_speed = std::clamp(m_EditorCamera.move_speed * (1.0f + 0.15f * wheel), 0.5f, 100.0f);
+				m_FlySpeedToastTimer = 1.25f; // show the new speed briefly
 			}
 
 			bool orbiting = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
@@ -442,6 +454,7 @@ namespace editor {
 			ImGui::End();
 		}
 
+		draw_overlays();
 		draw_modals();
 
 		rlImGuiEnd();
@@ -467,8 +480,7 @@ namespace editor {
 
 			// New Scene (Ctrl + N)
 			if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N)) {
-				m_ShowNewSceneModal = true;
-				strncpy(m_NewSceneInput, "my_new_scene", sizeof(m_NewSceneInput));
+				request_new_scene();
 			}
 
 			// Play / Stop toggle (Ctrl + P)
@@ -647,8 +659,79 @@ namespace editor {
 		if (auto pos = name.find_last_of('/'); pos != std::string::npos) name = name.substr(pos + 1);
 		if (auto pos = name.rfind(".json"); pos != std::string::npos) name = name.substr(0, pos);
 		if (name.empty()) name = "my_new_scene";
-		strncpy(m_NewSceneInput, name.c_str(), sizeof(m_NewSceneInput) - 1);
-		m_NewSceneInput[sizeof(m_NewSceneInput) - 1] = '\0';
+		snprintf(m_NewSceneInput, sizeof(m_NewSceneInput), "%s", name.c_str());
+	}
+
+	void EditorApp::apply_frame_pacing() {
+		if (m_SceneState == SceneState::Render) {
+			me::set_target_fps(0); // uncapped — accumulate samples as fast as possible
+		} else {
+			int refresh = GetMonitorRefreshRate(GetCurrentMonitor());
+			me::set_target_fps(refresh > 0 ? refresh : 60);
+		}
+	}
+
+	void EditorApp::open_scene(const std::string& vfs_path) {
+		// Leave play/render mode first — swapping the scene mid-simulation would
+		// mix the old simulation state into the new scene.
+		if (m_SceneState == SceneState::Play) {
+			on_stop();
+		} else if (m_SceneState == SceneState::Render) {
+			m_Raytracer.on_stop();
+			m_SceneState = SceneState::Edit;
+			apply_frame_pacing();
+		}
+		me::scene_manager::load(vfs_path); // SceneLoadedEvent does the bookkeeping
+		me::logger::info("Opened scene: " + vfs_path);
+	}
+
+	void EditorApp::request_exit() {
+		if (m_SceneDirty) {
+			m_PendingAction = PendingAction::Exit;
+			m_ShowUnsavedModal = true;
+		} else {
+			me::close_application();
+		}
+	}
+
+	void EditorApp::request_new_scene() {
+		if (m_SceneDirty) {
+			m_PendingAction = PendingAction::NewScene;
+			m_ShowUnsavedModal = true;
+		} else {
+			m_ShowNewSceneModal = true;
+			snprintf(m_NewSceneInput, sizeof(m_NewSceneInput), "%s", "my_new_scene");
+		}
+	}
+
+	void EditorApp::request_open_scene(const std::string& vfs_path) {
+		if (m_SceneDirty) {
+			m_PendingAction = PendingAction::OpenScene;
+			m_PendingScenePath = vfs_path;
+			m_ShowUnsavedModal = true;
+		} else {
+			open_scene(vfs_path);
+		}
+	}
+
+	void EditorApp::perform_pending_action() {
+		PendingAction action = m_PendingAction;
+		m_PendingAction = PendingAction::None;
+
+		switch (action) {
+		case PendingAction::Exit:
+			me::close_application();
+			break;
+		case PendingAction::NewScene:
+			m_ShowNewSceneModal = true;
+			snprintf(m_NewSceneInput, sizeof(m_NewSceneInput), "%s", "my_new_scene");
+			break;
+		case PendingAction::OpenScene:
+			open_scene(m_PendingScenePath);
+			break;
+		default:
+			break;
+		}
 	}
 
 	// Shows "<scene>[*]" in the OS window title; the star marks unsaved changes.
@@ -680,6 +763,7 @@ namespace editor {
 
 	void EditorApp::on_stop() {
 		m_SceneState = SceneState::Edit;
+		apply_frame_pacing();
 		me::logger::info("Mode set to: EDIT");
 		me::set_playing(false);
 		me::get_event_bus().publish<me::events::PlayStateChangedEvent>(false);
@@ -753,14 +837,33 @@ namespace editor {
 
 			// --- File Menu ---
 			if (ImGui::BeginMenu("File")) {
-				if (ImGui::MenuItem("New Scene", "Ctrl+N")) {
-					m_ShowNewSceneModal = true;
-					strncpy(m_NewSceneInput, "my_new_scene", sizeof(m_NewSceneInput));
+				if (ImGui::MenuItem("New Scene", "Ctrl+N")) request_new_scene();
+
+				// Open Scene: every .json in the project's scenes folder.
+				if (ImGui::BeginMenu("Open Scene")) {
+					bool any = false;
+					std::filesystem::path scenes_dir = m_ProjectPath / "assets" / "scenes";
+					if (std::filesystem::exists(scenes_dir)) {
+						for (const auto& entry : std::filesystem::directory_iterator(scenes_dir)) {
+							if (!entry.is_regular_file() || entry.path().extension() != ".json") continue;
+							std::string fname = entry.path().filename().string();
+							if (fname == ".temp_play.json") continue;
+							any = true;
+							std::string vfs_path = "game://scenes/" + fname;
+							bool is_current = (vfs_path == m_CurrentScenePath);
+							if (ImGui::MenuItem(fname.c_str(), nullptr, is_current)) {
+								request_open_scene(vfs_path);
+							}
+						}
+					}
+					if (!any) ImGui::TextDisabled("(no scenes found)");
+					ImGui::EndMenu();
 				}
+
 				if (ImGui::MenuItem("Save Scene", "Ctrl+S")) save_scene();
 				if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S")) open_save_as_modal();
 				ImGui::Separator();
-				if (ImGui::MenuItem("Exit")) me::close_application();
+				if (ImGui::MenuItem("Exit")) request_exit();
 				ImGui::EndMenu();
 			}
 
@@ -812,6 +915,8 @@ namespace editor {
 				if (ImGui::MenuItem("Lit Mode (Lighting)", nullptr, &lighting)) {
 					me::render::set_lighting_enabled(lighting);
 				}
+
+				ImGui::MenuItem("Stats Overlay", nullptr, &m_ShowStats);
 
 				ImGui::EndMenu();
 			}
@@ -878,6 +983,7 @@ namespace editor {
 			ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.2f, 0.8f, 1.0f));
 			if (ImGui::Button("RENDER", ImVec2(60, button_size))) {
 				m_SceneState = SceneState::Render;
+				apply_frame_pacing(); // uncap: every frame is a raytrace sample
 
 				// Get the raw bounds of the viewport
 				float raw_width = m_ViewportPanel.get_bounds().x;
@@ -949,12 +1055,51 @@ namespace editor {
 			if (ImGui::Button("STOP RENDER", ImVec2(100, button_size))) {
 				m_Raytracer.on_stop();           // Free the VRAM and vectors
 				m_SceneState = SceneState::Edit; // Return to Edit mode safely
+				apply_frame_pacing();            // re-cap to the monitor refresh
 			}
 			ImGui::PopStyleColor();
 		}
 
 		ImGui::End();
 		ImGui::PopStyleVar(1);
+	}
+
+	void EditorApp::draw_overlays() {
+		const ImGuiWindowFlags overlay_flags =
+			ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+			ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+			ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+			ImGuiWindowFlags_NoDocking;
+
+		const ImGuiViewport* vp = ImGui::GetMainViewport();
+
+		// Fly-speed toast: brief feedback while scrolling to tune the camera speed.
+		if (m_FlySpeedToastTimer > 0.0f) {
+			ImGui::SetNextWindowPos({ vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + 48.0f }, ImGuiCond_Always, { 0.5f, 0.0f });
+			ImGui::SetNextWindowBgAlpha(0.65f);
+			if (ImGui::Begin("##FlySpeedToast", nullptr, overlay_flags)) {
+				ImGui::Text("Fly Speed: %.1f", m_EditorCamera.move_speed);
+			}
+			ImGui::End();
+		}
+
+		// Stats overlay (View > Stats Overlay): frame timing + scene/raytracer info.
+		if (m_ShowStats) {
+			ImGui::SetNextWindowPos({ vp->WorkPos.x + vp->WorkSize.x - 12.0f, vp->WorkPos.y + 48.0f }, ImGuiCond_Always, { 1.0f, 0.0f });
+			ImGui::SetNextWindowBgAlpha(0.55f);
+			if (ImGui::Begin("##StatsOverlay", nullptr, overlay_flags)) {
+				ImGui::Text("FPS: %d (%.2f ms)", GetFPS(), GetFrameTime() * 1000.0f);
+				ImGui::Text("Entities: %d", (int)me::get_registry().view<me::components::TransformComponent>().size());
+				if (m_SceneState == SceneState::Render) {
+					ImGui::Separator();
+					ImGui::Text("Raytracer: %dx%d (%s)",
+						m_Raytracer.get_width(), m_Raytracer.get_height(),
+						m_Raytracer.current_backend == me::systems::RenderBackend::GPU ? "GPU" : "CPU");
+					ImGui::Text("Samples: %d / %d", m_Raytracer.get_accumulated_frames(), m_Raytracer.preview_samples);
+				}
+			}
+			ImGui::End();
+		}
 	}
 
 	void EditorApp::draw_modals() {
@@ -1008,6 +1153,36 @@ namespace editor {
 		}
 
 		// ==========================================
+		// UNSAVED CHANGES GUARD (Exit / New Scene / Open Scene)
+		// ==========================================
+		if (m_ShowUnsavedModal) ImGui::OpenPopup("Unsaved Changes");
+		if (ImGui::BeginPopupModal("Unsaved Changes", &m_ShowUnsavedModal, ImGuiWindowFlags_AlwaysAutoResize)) {
+			ImGui::Text("The current scene has unsaved changes.");
+			ImGui::TextDisabled("%s", m_CurrentScenePath.c_str());
+			ImGui::Dummy(ImVec2(0, 10));
+
+			if (ImGui::Button("Save", ImVec2(110, 0))) {
+				save_scene();
+				m_ShowUnsavedModal = false;
+				ImGui::CloseCurrentPopup();
+				perform_pending_action();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Don't Save", ImVec2(110, 0))) {
+				m_ShowUnsavedModal = false;
+				ImGui::CloseCurrentPopup();
+				perform_pending_action();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel", ImVec2(110, 0))) {
+				m_PendingAction = PendingAction::None;
+				m_ShowUnsavedModal = false;
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndPopup();
+		}
+
+		// ==========================================
 		// 2. EXPORT RENDER MODAL (Settings)
 		// ==========================================
 		if (m_ShowExportModal) ImGui::OpenPopup("Export High-Res Render");
@@ -1024,6 +1199,37 @@ namespace editor {
 			ImGui::InputInt("Samples (Rays per Pixel)", &m_Raytracer.export_samples);
 			ImGui::InputInt("Max Bounces", &m_Raytracer.export_bounces);
 
+			// Workload estimate — helps pick a backend before committing. GPU
+			// work is dispatched in short row bands (so a heavy frame can't trip
+			// the OS GPU watchdog), but very large exports still tax the UI.
+			{
+				double mpx = (double)m_Raytracer.export_width * (double)m_Raytracer.export_height / 1e6;
+				double work = mpx * (double)std::max(1, m_Raytracer.export_bounces);
+				int vram_mb = (int)(mpx * 8.0) + 1; // output image + readback staging
+
+				ImGui::Dummy(ImVec2(0, 6));
+				ImGui::Separator();
+				ImGui::TextDisabled("Estimate: %.1f MP/sample  |  ~%d MB VRAM  |  %d samples",
+					mpx, vram_mb, m_Raytracer.export_samples);
+
+				if (m_Raytracer.current_backend == me::systems::RenderBackend::GPU) {
+					if (work > 120.0) {
+						ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+							"Very heavy GPU export — the UI will be sluggish while it runs.");
+						ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+							"If your GPU driver still resets, switch the Backend to CPU.");
+					} else if (work > 40.0) {
+						ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f),
+							"Heavy GPU export — rendered in bands; the UI may stutter.");
+					}
+				} else if (work > 8.0) {
+					ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f),
+						"CPU at this size will be slow — the GPU backend renders in");
+					ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f),
+						"watchdog-safe bands and is usually the faster, safe choice.");
+				}
+			}
+
 			ImGui::Dummy(ImVec2(0, 10));
 
 			if (ImGui::Button("Render & Save", ImVec2(120, 0))) {
@@ -1034,7 +1240,13 @@ namespace editor {
 
 				auto now = std::time(nullptr);
 				char time_str[64];
-				std::strftime(time_str, sizeof(time_str), "%Y%m%d_%H%M%S", std::localtime(&now));
+				std::tm tm_buf{};
+#ifdef _WIN32
+				localtime_s(&tm_buf, &now);
+#else
+				localtime_r(&now, &tm_buf);
+#endif
+				std::strftime(time_str, sizeof(time_str), "%Y%m%d_%H%M%S", &tm_buf);
 				m_ExportPath = (m_ProjectPath / "renders" / (std::string("render_") + time_str + ".png")).string();
 
 				// 2. Sanitize the export settings (InputInt allows anything).
@@ -1103,9 +1315,11 @@ namespace editor {
 			ImGui::ProgressBar(progress, ImVec2(300, 20));
 			ImGui::Text("Calculating sample: %d / %d", done, m_Raytracer.export_samples);
 
-			// Render a chunk of samples per UI frame — fast export, responsive UI.
-			// The viewport pass is paused, so these are the only renders running.
-			const int samples_per_frame = 10;
+			// Render a chunk of samples per UI frame, sized so each UI frame does
+			// roughly constant work: small exports batch up to 10 samples, huge
+			// ones take 1 per frame so the Cancel button stays responsive.
+			long long px = (long long)m_Raytracer.export_width * (long long)m_Raytracer.export_height;
+			int samples_per_frame = (int)std::clamp(4'000'000LL / std::max(1LL, px), 1LL, 10LL);
 			for (int i = 0; i < samples_per_frame
 				&& m_Raytracer.get_accumulated_frames() < m_Raytracer.export_samples; ++i) {
 				m_Raytracer.on_update(me::get_registry(), m_EditorCamera, m_EditorCameraTransform);

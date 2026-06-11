@@ -46,12 +46,12 @@ namespace editor {
 		if (ImGui::BeginPopupContextWindow("ContentBrowserBackground", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
 			if (ImGui::MenuItem("New Folder")) {
 				m_ShowNewFolderModal = true;
-				strncpy(m_NewItemName, "NewFolder", sizeof(m_NewItemName));
+				snprintf(m_NewItemName, sizeof(m_NewItemName), "%s", "NewFolder");
 			}
 
 			if (ImGui::MenuItem("New Lua Script")) {
 				m_ShowNewScriptModal = true;
-				strncpy(m_NewItemName, "new_script", sizeof(m_NewItemName));
+				snprintf(m_NewItemName, sizeof(m_NewItemName), "%s", "new_script");
 			}
 
 			ImGui::Separator();
@@ -131,11 +131,13 @@ namespace editor {
 				// --- DOUBLE CLICKS ---
 				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
 					if (ext == ".json") {
-						// 1. Load the scene via the Scene Manager
-						me::scene_manager::load(path.string());
-
-						// 2. Send Events
-						me::get_event_bus().publish<me::events::EntitySelectedEvent>(me::entity::null);
+						// Ask the editor to open it: the editor prompts about unsaved
+						// changes first, then loads and updates the current-scene path
+						// (loading directly here would leave Ctrl+S pointed at the OLD
+						// scene file and a stale undo history).
+						std::string relative_vfs = "game://" + std::filesystem::relative(path, m_ProjectPath / "assets").string();
+						std::replace(relative_vfs.begin(), relative_vfs.end(), '\\', '/');
+						me::get_event_bus().publish<me::events::SceneOpenRequestEvent>(relative_vfs);
 
 					} else if (ext == ".glb" || ext == ".obj") {
 						std::string relative_vfs = "game://" + std::filesystem::relative(path, m_ProjectPath / "assets").string();
