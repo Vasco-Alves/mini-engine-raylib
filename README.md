@@ -73,8 +73,7 @@ The editor and the game runtime are two front-ends over the same engine API.
 Requires a C++23 compiler, CMake ≥ 3.5 (3.21+ recommended), and a GPU/driver with **OpenGL 4.3** (raylib requests a 4.3 context at startup; the GPU path-tracer backend uses compute shaders). The build statically links the MSVC runtime and pulls every dependency from `vendor/` via `add_subdirectory`, so make sure the submodules are present.
 
 ```bash
-# Clone with the vendored dependencies
-git clone --recurse-submodules https://github.com/Vasco-Alves/mini-engine-raylib.git
+git clone --recursive https://github.com/Vasco-Alves/mini-engine-raylib.git
 cd mini-engine-raylib
 # (if you already cloned without submodules: git submodule update --init --recursive)
 ```
