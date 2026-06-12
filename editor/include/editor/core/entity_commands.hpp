@@ -206,6 +206,84 @@ namespace editor {
 	};
 
 	// =========================================================================
+	// REPARENT — hierarchy drag-drop and "Unparent". Stores both sides of the
+	// move (parent + the local position that keeps the world position intact).
+	// =========================================================================
+	class ReparentCommand : public ICommand {
+	public:
+		ReparentCommand(me::Registry& reg, me::entity::entity_id entity,
+			me::entity::entity_id new_parent, Vector3 new_local_pos)
+			: m_Reg(&reg), m_Entity(entity), m_NewParent(new_parent), m_NewPos(new_local_pos) {
+			if (auto* t = m_Reg->try_get_component<me::components::TransformComponent>(entity)) {
+				m_OldParent = t->parent;
+				m_OldPos = t->position;
+			}
+		}
+
+		void Execute() override { apply(m_NewParent, m_NewPos); }
+		void Undo() override { apply(m_OldParent, m_OldPos); }
+
+	private:
+		void apply(me::entity::entity_id parent, const Vector3& pos) {
+			if (!m_Reg->is_alive(m_Entity)) return;
+			auto* t = m_Reg->try_get_component<me::components::TransformComponent>(m_Entity);
+			if (!t) return;
+
+			if (t->parent != me::entity::null)
+				if (auto* p = m_Reg->try_get_component<me::components::TransformComponent>(t->parent))
+					p->remove_child(m_Entity);
+
+			t->parent = me::entity::null;
+			if (parent != me::entity::null && m_Reg->is_alive(parent)) {
+				if (auto* p = m_Reg->try_get_component<me::components::TransformComponent>(parent)) {
+					t->parent = parent;
+					p->add_child(m_Entity);
+				}
+			}
+			t->position = pos;
+			t->is_dirty = true;
+		}
+
+		me::Registry* m_Reg;
+		me::entity::entity_id m_Entity;
+		me::entity::entity_id m_NewParent;
+		Vector3 m_NewPos;
+		me::entity::entity_id m_OldParent = me::entity::null;
+		Vector3 m_OldPos{ 0.0f, 0.0f, 0.0f };
+	};
+
+	// =========================================================================
+	// REPLACE COMPONENT STATE — swaps a component's serialized snapshot (used
+	// for Script attach/detach, where entries change inside one component).
+	// A null snapshot means "component absent".
+	// =========================================================================
+	class ReplaceComponentCommand : public ICommand {
+	public:
+		ReplaceComponentCommand(me::Registry& reg, me::entity::entity_id entity,
+			std::string meta_name, me::ecs::json after)
+			: m_Reg(&reg), m_Entity(entity), m_Meta(me::ecs::find(meta_name)), m_After(std::move(after)) {
+			if (m_Meta && m_Reg->is_alive(entity) && m_Meta->has(*m_Reg, entity))
+				m_Before = m_Meta->save(*m_Reg, entity);
+		}
+
+		void Execute() override { apply(m_After); }
+		void Undo() override { apply(m_Before); }
+
+	private:
+		void apply(const me::ecs::json& state) {
+			if (!m_Meta || !m_Reg->is_alive(m_Entity)) return;
+			if (m_Meta->has(*m_Reg, m_Entity)) m_Meta->remove(*m_Reg, m_Entity);
+			if (!state.is_null()) m_Meta->load(*m_Reg, m_Entity, state);
+		}
+
+		me::Registry* m_Reg;
+		me::entity::entity_id m_Entity;
+		const me::ecs::ComponentMeta* m_Meta;
+		me::ecs::json m_Before; // null = component was absent
+		me::ecs::json m_After;  // null = remove the component
+	};
+
+	// =========================================================================
 	// CREATE ENTITY (empty, with Tag + Transform, optionally parented)
 	// =========================================================================
 	class CreateEntityCommand : public ICommand {

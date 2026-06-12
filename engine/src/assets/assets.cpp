@@ -174,11 +174,11 @@ namespace me::assets {
 	ModelId load_model(const char* uri) {
 		if (!uri || !*uri) return ModelId{ 0 };
 
-		// 1. Hash the string instantly
+		// Hash the string instantly
 		std::uint32_t handle = hash_path(uri);
 		auto it = s_models.find(handle);
 
-		// 2. Load from disk if it doesn't exist
+		// Load from disk if it doesn't exist
 		if (it == s_models.end()) {
 			const std::string path = me::vfs::resolve(uri);
 			::Model mod = LoadModel(path.c_str());
@@ -197,7 +197,7 @@ namespace me::assets {
 			s_models[handle] = std::move(rec);
 			s_model_paths[handle] = uri;
 		}
-		// 3. Just increase the reference count!
+		// Just increase the reference count
 		else {
 			it->second.refs += 1;
 		}

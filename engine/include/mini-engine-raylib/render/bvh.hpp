@@ -13,13 +13,10 @@
 #include <cmath>
 #include <cfloat>
 
-// 1. FORWARD DECLARE THE BLAS CLASS
 namespace me::raytracing {
 	class TriangleBVH;
 }
 
-// 2. FORWARD DECLARE THE INTERNAL ASSET FUNCTION 
-// (This tricks the compiler so we don't need to include the private src header!)
 namespace me::assets {
 	const me::raytracing::TriangleBVH* internal_get_model_bvh(ModelId id);
 }
@@ -27,7 +24,7 @@ namespace me::assets {
 namespace me::raytracing {
 
 	// ============================================================
-	// 2. BLAS: Triangle BVH (Upgraded to an actual Tree!)
+	// BLAS: Triangle BVH (Upgraded to an actual Tree!)
 	// ============================================================
 	struct TriangleNode {
 		AABB     bounds;

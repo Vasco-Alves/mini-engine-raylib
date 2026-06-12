@@ -26,6 +26,7 @@ namespace editor {
 			editor::CommandHistory& command_history,
 			Texture2D* raytraced_texture,
 			bool is_render_mode,
+			bool is_play_mode,
 			me::systems::RaytracerSystem* raytracer
 		);
 

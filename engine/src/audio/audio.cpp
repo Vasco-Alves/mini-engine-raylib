@@ -101,7 +101,6 @@ namespace me::audio {
 		auto it = s_sound_by_path.find(key);
 		if (it == s_sound_by_path.end()) {
 
-			// VFS FIX: Resolve the physical path dynamically!
 			std::string physical_path = me::vfs::resolve(key);
 			::Sound s = LoadSound(physical_path.c_str());
 
@@ -167,7 +166,6 @@ namespace me::audio {
 		auto it = s_music_by_path.find(key);
 		if (it == s_music_by_path.end()) {
 
-			// VFS FIX: Resolve the physical path dynamically!
 			std::string physical_path = me::vfs::resolve(key);
 			::Music m = LoadMusicStream(physical_path.c_str());
 

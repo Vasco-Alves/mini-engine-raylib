@@ -25,8 +25,13 @@ namespace me {
 		// =====================================================================
 		// SAVE
 		// =====================================================================
+		// Bump when the on-disk scene structure changes incompatibly; loaders
+		// can then migrate or at least warn instead of silently misreading.
+		constexpr int kSceneFormatVersion = 1;
+
 		bool save(Registry& reg, const std::string& filepath) {
 			json root;
+			root["version"] = kSceneFormatVersion;
 			root["entities"] = json::array();
 
 			// Every persisted entity carries a Transform, so the transform pool is
@@ -85,6 +90,12 @@ namespace me {
 				return false;
 			}
 
+			int version = root.value("version", 1); // pre-versioning files are format 1
+			if (version > kSceneFormatVersion) {
+				me::logger::warn("Scene was saved by a newer engine (format " + std::to_string(version)
+					+ ", this build reads " + std::to_string(kSceneFormatVersion) + ") - loading anyway.");
+			}
+
 			reg.clear();
 
 			if (!root.contains("entities") || !root["entities"].is_array()) return true;
@@ -114,7 +125,15 @@ namespace me {
 				me::entity::entity_id e = loaded[i].get_id();
 
 				for (const auto& meta : me::ecs::components()) {
-					if (comps.contains(meta.name)) meta.load(reg, e, comps[meta.name]);
+					if (!comps.contains(meta.name)) continue;
+					// One malformed component must not abort the whole scene:
+					// log it, skip it, keep loading everything else.
+					try {
+						meta.load(reg, e, comps[meta.name]);
+					} catch (const std::exception& ex) {
+						me::logger::warn("Scene load: skipping malformed '" + meta.name
+							+ "' component: " + ex.what());
+					}
 				}
 			}
 

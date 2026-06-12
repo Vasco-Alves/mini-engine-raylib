@@ -72,19 +72,16 @@ namespace editor {
 				me::entity::entity_id dropped_entity = *(const me::entity::entity_id*)payload->Data;
 				auto* dropped_transform = m_Context->try_get_component<me::components::TransformComponent>(dropped_entity);
 
-				// Detach from current parent
 				if (dropped_transform && dropped_transform->parent != me::entity::null) {
-					auto* old_parent = m_Context->try_get_component<me::components::TransformComponent>(dropped_transform->parent);
-					if (old_parent) {
-						old_parent->remove_child(dropped_entity);
-						dropped_transform->position = {
-							dropped_transform->model_matrix.m12,
-							dropped_transform->model_matrix.m13,
-							dropped_transform->model_matrix.m14
-						};
-					}
-
-					dropped_transform->parent = me::entity::null;
+					// Keep the world position: the world translation becomes the
+					// new root-local position. Undoable.
+					Vector3 world_pos = {
+						dropped_transform->model_matrix.m12,
+						dropped_transform->model_matrix.m13,
+						dropped_transform->model_matrix.m14
+					};
+					command_history.AddCommand(std::make_unique<editor::ReparentCommand>(
+						*m_Context, dropped_entity, me::entity::null, world_pos));
 				}
 			}
 			ImGui::EndDragDropTarget();
@@ -208,19 +205,13 @@ namespace editor {
 							dropped_transform->model_matrix.m14
 						};
 
-						// Convert World -> Local relative to the new parent
+						// Convert World -> Local relative to the new parent,
+						// then reparent through the undo history.
 						Matrix invParent = MatrixInvert(transform->model_matrix);
 						Vector3 localPos = Vector3Transform(trueWorldPos, invParent);
 
-						dropped_transform->position = localPos;
-
-						// Attach
-						if (dropped_transform->parent != me::entity::null) {
-							auto* old_parent = m_Context->try_get_component<me::components::TransformComponent>(dropped_transform->parent);
-							if (old_parent) old_parent->remove_child(dropped_entity);
-						}
-						dropped_transform->parent = entity;
-						transform->add_child(dropped_entity);
+						command_history.AddCommand(std::make_unique<editor::ReparentCommand>(
+							*m_Context, dropped_entity, entity, localPos));
 					}
 				}
 			}
@@ -248,19 +239,16 @@ namespace editor {
 				m_SelectionContext = raw->clone_id();
 			}
 
-			// Unparent Option
+			// Unparent Option (undoable)
 			if (transform->parent != me::entity::null) {
 				if (ImGui::MenuItem("Unparent (Move to Root)")) {
-					auto* old_parent = m_Context->try_get_component<me::components::TransformComponent>(transform->parent);
-					if (old_parent) {
-						old_parent->remove_child(entity);
-						transform->position = {
-							transform->model_matrix.m12,
-							transform->model_matrix.m13,
-							transform->model_matrix.m14
-						};
-					}
-					transform->parent = me::entity::null;
+					Vector3 world_pos = {
+						transform->model_matrix.m12,
+						transform->model_matrix.m13,
+						transform->model_matrix.m14
+					};
+					command_history.AddCommand(std::make_unique<editor::ReparentCommand>(
+						*m_Context, entity, me::entity::null, world_pos));
 				}
 			}
 

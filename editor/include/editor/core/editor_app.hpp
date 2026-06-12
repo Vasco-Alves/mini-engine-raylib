@@ -16,6 +16,9 @@
 #include "editor/panels/console_panel.hpp"
 #include "editor/panels/viewport_panel.hpp"
 #include "editor/panels/project_hub_panel.hpp"
+#include "editor/panels/animation_panel.hpp"
+
+#include "editor/core/scene_animation.hpp"
 
 namespace editor {
 
@@ -45,6 +48,9 @@ namespace editor {
 		void draw_menu_bar();
 		void draw_toolbar();
 		void draw_modals();
+		// PNG-export + animation-render dialogs and their progress/render loops
+		// (defined in editor_offline_render.cpp).
+		void draw_offline_render_modals();
 		void draw_overlays();
 		void apply_theme();
 		void update_window_title();
@@ -52,6 +58,18 @@ namespace editor {
 		// Caps the frame rate to the monitor refresh in Edit/Play (no point
 		// rendering the UI faster), uncaps it in Render (every frame = a sample).
 		void apply_frame_pacing();
+
+		// Swaps dock layouts when crossing Edit <-> Render (Play shares Edit's).
+		void switch_mode_layout(SceneState from, SceneState to);
+
+		// --- Layout persistence (explicit-save model) ---
+		// ImGui's continuous imgui.ini autosave is disabled. Within a session,
+		// mode switches keep your arrangement in memory; across sessions only
+		// what you saved with "Save Layout" comes back. Fresh installs fall back
+		// to the defaults shipped in assets/layouts/.
+		void save_current_layout();      // writes layout_<mode>.ini next to the exe
+		void reset_layout_to_default();  // reloads the shipped default for this mode
+		void save_layout_as_default();   // exports current layout into assets/layouts/
 
 		// --- Entity Operations (undoable, shared by shortcuts and the Edit menu) ---
 		void delete_selected_entity();
@@ -63,6 +81,21 @@ namespace editor {
 		void load_engine_config();
 		void save_engine_config();
 		void add_recent_project(const std::string& path);
+
+		// Packages the prebuilt game runtime (game.exe, built with the engine)
+		// together with this project's assets into a standalone game folder.
+		void export_game();
+
+		// --- Animation (camera track + entity component tracks) ---
+		// The tracks live in a sidecar next to the scene ("foo.anim.json"),
+		// saved with Ctrl+S and loaded whenever the scene loads.
+		std::string anim_sidecar_path() const;
+		void save_animation_sidecar();
+		void load_animation_sidecar();
+		void start_animation_render();
+		// Moves camera + entity tracks to time t and restarts accumulation
+		// (with a transform + BVH/SSBO rebuild when entity tracks exist).
+		void apply_animation_at(float t);
 
 		// --- Scene Management ---
 		void new_scene();
@@ -96,6 +129,15 @@ namespace editor {
 		bool m_ShowNewSceneModal = false;
 		bool m_ShowSaveAsModal = false;
 		bool m_ShowUnsavedModal = false;
+
+		// --- Game export (File > Export Game...) ---
+		bool m_ShowExportGameModal = false;
+		char m_ExportGameName[128] = "";
+		char m_ExportGameDir[512] = "";
+		int  m_ExportGameW = 1280;
+		int  m_ExportGameH = 720;
+		bool m_ExportGameVsync = true;
+		std::string m_ExportGameScene; // vfs path of the scene the game boots into
 		PendingAction m_PendingAction = PendingAction::None;
 		std::string m_PendingScenePath;
 
@@ -103,9 +145,42 @@ namespace editor {
 		bool m_SceneDirty = false;
 		std::string m_LastWindowTitle;
 
+		// --- Help windows ---
+		bool m_ShowAboutModal = false;
+		bool m_ShowControlsWindow = false;
+
 		// --- Overlays ---
 		bool m_ShowStats = false;        // View menu toggle: FPS / entities / samples
 		float m_FlySpeedToastTimer = 0.0f; // shows fly speed briefly after scrolling
+
+		// --- Panel visibility (per mode; Play shares Edit's set) ---
+		// Edit defaults to the scene-building panels; Render swaps the content
+		// browser/console out for the animation timeline, so the two modes feel
+		// like different workspaces. Toggled in View > Panels, saved in the
+		// engine config.
+		struct PanelSet {
+			bool hierarchy = true;
+			bool inspector = true;
+			bool browser = true;
+			bool console = true;
+			bool animation = true;
+			bool raytracer_settings = true; // only drawn in Render mode anyway
+		};
+		PanelSet m_PanelsEdit{ .hierarchy = true, .inspector = true, .browser = true,
+							   .console = true, .animation = false, .raytracer_settings = true };
+		PanelSet m_PanelsRender{ .hierarchy = true, .inspector = true, .browser = false,
+								 .console = false, .animation = true, .raytracer_settings = true };
+		PanelSet& active_panels() { return m_SceneState == SceneState::Render ? m_PanelsRender : m_PanelsEdit; }
+
+		// --- Animation (camera track + entity component tracks) ---
+		SceneAnimation m_Animation;
+		AnimationPanel m_AnimationPanel;
+		bool m_ShowAnimRenderModal = false;
+		bool m_IsRenderingAnim = false; // drives the frame loop in draw_modals
+		int  m_AnimFps = 30;
+		int  m_AnimRenderFrame = 0;
+		int  m_AnimTotalFrames = 0;
+		std::string m_AnimOutDir;
 
 		// --- Export State Tracking ---
 		bool m_ShowExportModal = false;
@@ -140,8 +215,16 @@ namespace editor {
 		ProjectHubPanel m_HubPanel;
 
 		// --- Layout ---
-		bool m_WantsToSaveLayout = false;
-		bool m_WantsToLoadLayout = false;
+		// Deferred layout IO: applied at the top of the next UI frame (vfs paths).
+		std::string m_PendingLayoutSave;
+		std::string m_PendingLayoutLoad;
+		std::string m_PendingLayoutLoadMem; // ini text to load (session stash)
+		bool m_AutoModeLayouts = true; // Edit/Render swap dock layouts automatically
+
+		// In-session layout stash per mode: switching modes keeps the current
+		// arrangement without touching disk (disk changes only via Save Layout).
+		std::string m_LayoutMemEdit;
+		std::string m_LayoutMemRender;
 
 		// -- Command History --
 		editor::CommandHistory m_CommandHistory;

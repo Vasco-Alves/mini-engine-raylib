@@ -1,0 +1,108 @@
+{
+    "version": 1,
+    "entities": [
+        {
+            "id": 1,
+            "components": {
+                "Transform": {"x": 0.0, "y": 0.0, "z": 0.0, "rot_x": 0.0, "rot_y": 0.0, "rot_z": 0.0, "sx": 12.0, "sy": 1.0, "sz": 12.0, "parent": 0, "children": []},
+                "Tag": {"name": "Ground"},
+                "MeshRenderer": {"type": 2, "color_r": 205, "color_g": 205, "color_b": 205, "wireframe": false},
+                "Material": {"color_r": 205, "color_g": 205, "color_b": 205, "color_a": 255, "roughness": 0.9, "metallic": 0.0, "emission_power": 0.0, "transmission": 0.0, "ior": 1.5, "tint_strength": 1.0},
+                "RigidBody": {"type": 0, "mass": 1.0, "bounciness": 0.2, "friction": 0.7},
+                "BoxCollider": {"hx": 1.0, "hy": 0.01, "hz": 1.0, "show_debug": false}
+            }
+        },
+        {
+            "id": 2,
+            "components": {
+                "Transform": {"x": 0.0, "y": 20.0, "z": 0.0, "rot_x": 50.0, "rot_y": 30.0, "rot_z": 0.0, "sx": 1.0, "sy": 1.0, "sz": 1.0, "parent": 0, "children": []},
+                "Tag": {"name": "Sun"},
+                "DirectionalLight": {"color_r": 255, "color_g": 250, "color_b": 240, "intensity": 1.1, "angular_radius": 1.5}
+            }
+        },
+        {
+            "id": 3,
+            "components": {
+                "Transform": {"x": 7.0, "y": 4.5, "z": 9.0, "rot_x": 0.0, "rot_y": 0.0, "rot_z": 0.0, "sx": 1.0, "sy": 1.0, "sz": 1.0, "parent": 0, "children": []},
+                "Tag": {"name": "Camera"},
+                "Camera": {"active": true, "target_x": 0.0, "target_y": 1.0, "target_z": 0.0, "up_x": 0.0, "up_y": 1.0, "up_z": 0.0, "fov": 50.0, "projection": 0}
+            }
+        },
+        {
+            "id": 4,
+            "components": {
+                "Transform": {"x": -3.0, "y": 1.0, "z": 0.5, "rot_x": 0.0, "rot_y": 0.0, "rot_z": 0.0, "sx": 1.0, "sy": 1.0, "sz": 1.0, "parent": 0, "children": []},
+                "Tag": {"name": "Glass Sphere"},
+                "MeshRenderer": {"type": 1, "color_r": 200, "color_g": 255, "color_b": 220, "wireframe": false},
+                "Material": {"color_r": 190, "color_g": 255, "color_b": 215, "color_a": 255, "roughness": 0.0, "metallic": 0.0, "emission_power": 0.0, "transmission": 1.0, "ior": 1.5, "tint_strength": 1.0}
+            }
+        },
+        {
+            "id": 5,
+            "components": {
+                "Transform": {"x": 3.0, "y": 1.0, "z": 0.5, "rot_x": 0.0, "rot_y": 0.0, "rot_z": 0.0, "sx": 1.0, "sy": 1.0, "sz": 1.0, "parent": 0, "children": []},
+                "Tag": {"name": "Mirror Sphere"},
+                "MeshRenderer": {"type": 1, "color_r": 240, "color_g": 240, "color_b": 245, "wireframe": false},
+                "Material": {"color_r": 250, "color_g": 250, "color_b": 250, "color_a": 255, "roughness": 0.0, "metallic": 1.0, "emission_power": 0.0, "transmission": 0.0, "ior": 1.5, "tint_strength": 1.0}
+            }
+        },
+        {
+            "id": 6,
+            "components": {
+                "Transform": {"x": 0.0, "y": 0.0, "z": -2.5, "rot_x": 0.0, "rot_y": 25.0, "rot_z": 0.0, "sx": 0.4, "sy": 0.4, "sz": 0.4, "parent": 0, "children": []},
+                "Tag": {"name": "Dragon"},
+                "Model": {"path": "game://models/dragon.obj", "color_r": 255, "color_g": 255, "color_b": 255},
+                "Material": {"color_r": 255, "color_g": 190, "color_b": 90, "color_a": 255, "roughness": 0.35, "metallic": 1.0, "emission_power": 0.0, "transmission": 0.0, "ior": 1.5, "tint_strength": 1.0}
+            }
+        },
+        {
+            "id": 7,
+            "components": {
+                "Transform": {"x": -1.4, "y": 0.5, "z": 2.4, "rot_x": 0.0, "rot_y": 15.0, "rot_z": 0.0, "sx": 0.5, "sy": 0.5, "sz": 0.5, "parent": 0, "children": []},
+                "Tag": {"name": "Glow Cube"},
+                "MeshRenderer": {"type": 0, "color_r": 255, "color_g": 150, "color_b": 60, "wireframe": false},
+                "Material": {"color_r": 255, "color_g": 150, "color_b": 60, "color_a": 255, "roughness": 1.0, "metallic": 0.0, "emission_power": 6.0, "transmission": 0.0, "ior": 1.5, "tint_strength": 1.0}
+            }
+        },
+        {
+            "id": 8,
+            "components": {
+                "Transform": {"x": 1.6, "y": 0.5, "z": 2.4, "rot_x": 0.0, "rot_y": -10.0, "rot_z": 0.0, "sx": 0.5, "sy": 0.5, "sz": 0.5, "parent": 0, "children": []},
+                "Tag": {"name": "Jumper"},
+                "MeshRenderer": {"type": 0, "color_r": 90, "color_g": 160, "color_b": 255, "wireframe": false},
+                "Material": {"color_r": 90, "color_g": 160, "color_b": 255, "color_a": 255, "roughness": 0.6, "metallic": 0.0, "emission_power": 0.0, "transmission": 0.0, "ior": 1.5, "tint_strength": 1.0},
+                "RigidBody": {"type": 1, "mass": 1.0, "bounciness": 0.1, "friction": 0.6},
+                "BoxCollider": {"hx": 1.0, "hy": 1.0, "hz": 1.0, "show_debug": false},
+                "Script": {"scripts": [{"path": "game://scripts/jump.lua"}]},
+                "AudioSource": {"filepath": "game://audio/jump.wav", "volume": 1.0, "pitch": 1.0, "play_on_awake": false, "spatial": true, "max_distance": 50.0}
+            }
+        },
+        {
+            "id": 9,
+            "components": {
+                "Transform": {"x": -2.0, "y": 0.45, "z": 4.4, "rot_x": 0.0, "rot_y": 0.0, "rot_z": 0.0, "sx": 0.45, "sy": 0.45, "sz": 0.45, "parent": 0, "children": []},
+                "Tag": {"name": "Rough 0.05"},
+                "MeshRenderer": {"type": 1, "color_r": 120, "color_g": 170, "color_b": 240, "wireframe": false},
+                "Material": {"color_r": 120, "color_g": 170, "color_b": 240, "color_a": 255, "roughness": 0.05, "metallic": 0.0, "emission_power": 0.0, "transmission": 0.0, "ior": 1.5, "tint_strength": 1.0}
+            }
+        },
+        {
+            "id": 10,
+            "components": {
+                "Transform": {"x": 0.0, "y": 0.45, "z": 4.4, "rot_x": 0.0, "rot_y": 0.0, "rot_z": 0.0, "sx": 0.45, "sy": 0.45, "sz": 0.45, "parent": 0, "children": []},
+                "Tag": {"name": "Rough 0.4"},
+                "MeshRenderer": {"type": 1, "color_r": 120, "color_g": 170, "color_b": 240, "wireframe": false},
+                "Material": {"color_r": 120, "color_g": 170, "color_b": 240, "color_a": 255, "roughness": 0.4, "metallic": 0.0, "emission_power": 0.0, "transmission": 0.0, "ior": 1.5, "tint_strength": 1.0}
+            }
+        },
+        {
+            "id": 11,
+            "components": {
+                "Transform": {"x": 2.0, "y": 0.45, "z": 4.4, "rot_x": 0.0, "rot_y": 0.0, "rot_z": 0.0, "sx": 0.45, "sy": 0.45, "sz": 0.45, "parent": 0, "children": []},
+                "Tag": {"name": "Rough 0.9"},
+                "MeshRenderer": {"type": 1, "color_r": 120, "color_g": 170, "color_b": 240, "wireframe": false},
+                "Material": {"color_r": 120, "color_g": 170, "color_b": 240, "color_a": 255, "roughness": 0.9, "metallic": 0.0, "emission_power": 0.0, "transmission": 0.0, "ior": 1.5, "tint_strength": 1.0}
+            }
+        }
+    ]
+}

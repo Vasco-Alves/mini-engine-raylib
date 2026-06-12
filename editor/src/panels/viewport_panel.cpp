@@ -31,7 +31,7 @@ namespace editor {
 		EndTextureMode();
 	}
 
-	void ViewportPanel::on_imgui_render(me::components::TransformComponent& cam_transform, me::components::CameraComponent& camera, me::Entity selected_entity, int gizmo_type, editor::CommandHistory& command_history, Texture2D* raytraced_texture, bool is_render_mode, me::systems::RaytracerSystem* raytracer) {
+	void ViewportPanel::on_imgui_render(me::components::TransformComponent& cam_transform, me::components::CameraComponent& camera, me::Entity selected_entity, int gizmo_type, editor::CommandHistory& command_history, Texture2D* raytraced_texture, bool is_render_mode, bool is_play_mode, me::systems::RaytracerSystem* raytracer) {
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{ 0, 0 });
 		ImGui::Begin("Scene View");
 
@@ -51,6 +51,14 @@ namespace editor {
 		} else {
 			// Standard OpenGL Real-Time Viewport
 			rlImGuiImageRenderTexture(&m_Texture);
+		}
+
+		// Mode identity: frame the viewport in the mode's color so the editor
+		// state reads at a glance (green = playing, purple = rendering).
+		if (is_render_mode || is_play_mode) {
+			ImU32 frame_col = is_render_mode ? IM_COL32(150, 80, 220, 255) : IM_COL32(70, 190, 95, 255);
+			ImGui::GetWindowDrawList()->AddRect(
+				ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), frame_col, 0.0f, 0, 3.0f);
 		}
 
 		// ==========================================

@@ -1,12 +1,31 @@
 #include "mini-engine-raylib/systems/transform_system.hpp"
 #include "mini-engine-raylib/core/engine.hpp"
+#include "mini-engine-raylib/core/logger.hpp"
 #include "mini-engine-raylib/ecs/components.hpp"
 #include <mini-ecs/registry.hpp>
 #include <raymath.h>
 
+#include <unordered_set>
+
 namespace me::systems {
 
+	namespace {
+		// Guards the hierarchy crawl against cycles in corrupt or hand-edited
+		// scene files (A parenting B parenting A would recurse forever and
+		// overflow the stack). Static so the set's capacity is reused each frame.
+		std::unordered_set<me::entity::entity_id> s_visited;
+		bool s_cycle_warned = false;
+	}
+
 	void update_transform_node(me::Registry& reg, me::entity::entity_id e, const Matrix& parent_matrix, bool parent_dirty) {
+		if (!s_visited.insert(e).second) {
+			if (!s_cycle_warned) {
+				me::logger::warn("Transform hierarchy contains a cycle - breaking the loop (check the scene file).");
+				s_cycle_warned = true;
+			}
+			return;
+		}
+
 		auto* t = reg.try_get_component<me::components::TransformComponent>(e);
 		if (!t) return;
 
@@ -72,14 +91,33 @@ namespace me::systems {
 		auto& transforms = reg.view<me::components::TransformComponent>();
 
 		Matrix identity = MatrixIdentity();
+		s_visited.clear();
 
-		// Sweep 1: Find all Root Entities (Objects with no parent)
+		// Sweep 1: roots — no parent, or a parent that doesn't resolve (a
+		// corrupt file or a stale id). Treating broken parents as roots keeps
+		// those entities updating and visible instead of frozen forever.
 		for (size_t i = 0; i < transforms.size(); ++i) {
 			auto e = transforms.entity_map[i];
 			auto& t = transforms.components[i];
 
-			if (t.parent == me::entity::null) {
+			bool parent_resolves = t.parent != me::entity::null
+				&& reg.try_get_component<me::components::TransformComponent>(t.parent) != nullptr;
+			if (!parent_resolves) {
 				// Updating the root node will automatically recurse and update all its children
+				update_transform_node(reg, e, identity, false);
+			}
+		}
+
+		// Sweep 2: anything still unvisited sits in a parent cycle with no
+		// root (e.g. A and B parenting each other). Update each standalone so
+		// the entities stay visible and editable rather than disappearing.
+		for (size_t i = 0; i < transforms.size(); ++i) {
+			auto e = transforms.entity_map[i];
+			if (!s_visited.contains(e)) {
+				if (!s_cycle_warned) {
+					me::logger::warn("Transform hierarchy contains a cycle - breaking the loop (check the scene file).");
+					s_cycle_warned = true;
+				}
 				update_transform_node(reg, e, identity, false);
 			}
 		}

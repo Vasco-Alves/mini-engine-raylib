@@ -47,7 +47,7 @@ namespace me::systems {
 		for (size_t i = 0; i < source_pool.size(); ++i) {
 			auto& source = source_pool.components[i];
 
-			// Handle Play On Awake (ONLY if the game is actively playing!)
+			// Handle Play On Awake (ONLY if the game is actively playing)
 			if (me::is_playing() && source.play_on_awake && !source.has_played_awake) {
 				source.trigger_play = true;
 				source.has_played_awake = true; // Ensure it only fires once

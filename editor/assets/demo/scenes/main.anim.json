@@ -1,0 +1,35 @@
+{
+    "camera_track": [
+        {
+            "time": 0.0,
+            "px": 7.0, "py": 4.5, "pz": 9.0,
+            "tx": 0.0, "ty": 1.0, "tz": 0.0,
+            "fov": 50.0, "exposure": 0.6, "aperture": 0.0, "focus_distance": 10.0,
+            "easing": 1
+        },
+        {
+            "time": 6.0,
+            "px": -7.0, "py": 3.0, "pz": 9.0,
+            "tx": 0.0, "ty": 1.0, "tz": 0.0,
+            "fov": 50.0, "exposure": 0.6, "aperture": 0.0, "focus_distance": 10.0,
+            "easing": 1
+        }
+    ],
+    "environment_track": [],
+    "entity_tracks": [
+        {
+            "entity": "Glow Cube",
+            "component": "Material",
+            "keys": [
+                {
+                    "time": 0.0, "easing": 1,
+                    "value": {"color_r": 255, "color_g": 150, "color_b": 60, "color_a": 255, "roughness": 1.0, "metallic": 0.0, "emission_power": 0.0, "transmission": 0.0, "ior": 1.5, "tint_strength": 1.0}
+                },
+                {
+                    "time": 6.0, "easing": 1,
+                    "value": {"color_r": 255, "color_g": 150, "color_b": 60, "color_a": 255, "roughness": 1.0, "metallic": 0.0, "emission_power": 8.0, "transmission": 0.0, "ior": 1.5, "tint_strength": 1.0}
+                }
+            ]
+        }
+    ]
+}

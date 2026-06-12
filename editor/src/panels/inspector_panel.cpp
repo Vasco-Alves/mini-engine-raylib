@@ -11,6 +11,7 @@
 #include <mini-engine-raylib/core/logger.hpp>
 #include <mini-engine-raylib/render/color.hpp>
 #include <imgui.h>
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -461,8 +462,28 @@ namespace editor {
 			if (ImGui::Button("Stop", ImVec2(50, 0))) bgm->trigger_stop = true;
 		}
 
-		void draw_script(me::Entity entity) {
+		void draw_script(me::Entity entity, editor::CommandHistory& command_history) {
 			auto* script_comp = entity.try_get_component<me::components::ScriptComponent>();
+
+			// Script attach/detach goes through the undo history as a whole-
+			// component snapshot; the registry re-creates instances from paths.
+			auto current_paths = [&]() {
+				std::vector<std::string> p;
+				if (auto* sc = entity.try_get_component<me::components::ScriptComponent>())
+					for (const auto& inst : sc->scripts) p.push_back(inst.path);
+				return p;
+				};
+			auto commit_scripts = [&](const std::vector<std::string>& paths) {
+				me::ecs::json state = nullptr;
+				if (!paths.empty()) {
+					me::ecs::json arr = me::ecs::json::array();
+					for (const auto& p : paths) arr.push_back({ {"path", p} });
+					state = me::ecs::json{ {"scripts", arr} };
+				}
+				command_history.AddCommand(std::make_unique<editor::ReplaceComponentCommand>(
+					me::get_registry(), entity.get_id(), "Script", std::move(state)));
+				};
+
 			if (script_comp) {
 				ImGui::PushID("Scripts");
 				bool opened = ImGui::TreeNodeEx("Lua Scripts", s_TreeNodeFlags);
@@ -483,11 +504,12 @@ namespace editor {
 					}
 
 					if (script_to_delete != (size_t)-1) {
-						script_comp->scripts.erase(script_comp->scripts.begin() + script_to_delete);
-						if (script_comp->scripts.empty()) {
-							entity.remove_component<me::components::ScriptComponent>();
-							script_comp = nullptr;
+						auto paths = current_paths();
+						if (script_to_delete < paths.size()) {
+							paths.erase(paths.begin() + script_to_delete);
+							commit_scripts(paths); // empty list removes the component
 						}
+						script_comp = entity.try_get_component<me::components::ScriptComponent>();
 					}
 					ImGui::TreePop();
 				}
@@ -515,19 +537,11 @@ namespace editor {
 					std::string path_str(dropped_path);
 
 					if (path_str.find(".lua") != std::string::npos) {
-						if (!script_comp) {
-							me::components::ScriptComponent sc;
-							sc.scripts.push_back({ path_str });
-							entity.add_component<me::components::ScriptComponent>(sc);
-						} else {
-							bool already_attached = false;
-							for (const auto& existing : script_comp->scripts) {
-								if (existing.path == path_str) {
-									already_attached = true;
-									break;
-								}
-							}
-							if (!already_attached) script_comp->scripts.push_back({ path_str });
+						auto paths = current_paths();
+						bool already_attached = std::find(paths.begin(), paths.end(), path_str) != paths.end();
+						if (!already_attached) {
+							paths.push_back(path_str);
+							commit_scripts(paths);
 						}
 					}
 				}
@@ -611,7 +625,7 @@ namespace editor {
 				if (c.draw) c.draw(selected_entity, command_history);
 			}
 
-			draw_script(selected_entity);
+			draw_script(selected_entity, command_history);
 			draw_add_component_menu(selected_entity, command_history);
 		} else {
 			ImGui::Text("Select an entity to view its properties.");

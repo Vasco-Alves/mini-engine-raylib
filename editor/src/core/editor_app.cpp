@@ -1,5 +1,6 @@
 #include "editor/core/editor_app.hpp"
 #include "editor/core/entity_commands.hpp"
+#include "editor/utils/file_dialogs.hpp"
 
 #include <imgui.h>
 #include <rlImGui.h>
@@ -8,10 +9,12 @@
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <algorithm>
+#include <cmath>
 #include <ctime>
 #include <cstdio>
 
 #include <mini-engine-raylib/core/engine.hpp>
+#include <mini-engine-raylib/core/version.hpp>
 #include <mini-engine-raylib/core/vfs.hpp>
 #include <mini-engine-raylib/core/file_system.hpp>
 #include <mini-engine-raylib/core/events.hpp>
@@ -39,8 +42,30 @@ namespace editor {
 		// Mount the engine assets folder
 		me::vfs::mount("engine", "assets");
 
+		// Window/taskbar icon (the .exe file icon is baked in via resources/app.rc).
+		{
+			Image icon = LoadImage("assets/icon.png");
+			if (icon.data) {
+				ImageFormat(&icon, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+				SetWindowIcon(icon);
+				UnloadImage(icon);
+			}
+		}
+
 		rlImGuiSetup(true);
 		ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+
+		// Explicit-save layout model: disable ImGui's continuous imgui.ini
+		// autosave. The layout you see on startup is the last one you SAVED
+		// (layout_edit.ini), falling back to the default shipped with the app —
+		// so a fresh install looks the same as the author's setup.
+		ImGui::GetIO().IniFilename = nullptr;
+		{
+			auto user_file = me::vfs::resolve("root://layout_edit.ini");
+			if (std::filesystem::exists(user_file)) m_PendingLayoutLoad = "root://layout_edit.ini";
+			else m_PendingLayoutLoad = "root://assets/layouts/layout_edit.ini"; // skipped if absent
+		}
+
 		apply_theme();
 
 		subcribe_events();
@@ -48,6 +73,11 @@ namespace editor {
 		// Wire up the Project Hub Callbacks
 		m_HubPanel.on_project_open = [this](const std::filesystem::path& p) { load_project(p); };
 		m_HubPanel.on_project_create = [this](const std::filesystem::path& p) { create_project(p); };
+		m_HubPanel.on_recent_remove = [this](const std::string& p) {
+			m_RecentProjects.erase(std::remove(m_RecentProjects.begin(), m_RecentProjects.end(), p), m_RecentProjects.end());
+			m_HubPanel.set_recent_projects(m_RecentProjects);
+			save_engine_config();
+		};
 
 		load_engine_config();
 		m_ViewportPanel.on_start();
@@ -84,6 +114,7 @@ namespace editor {
 			if (e->filepath.find(".temp_play.json") == std::string::npos) {
 				m_CurrentScenePath = e->filepath;
 				m_SceneDirty = false; // freshly loaded == on-disk state
+				load_animation_sidecar();
 			}
 			});
 		bus.subscribe<me::events::SceneOpenRequestEvent>([this](auto* e) {
@@ -112,6 +143,14 @@ namespace editor {
 		if (!m_IsProjectLoaded) return;
 
 		if (m_FlySpeedToastTimer > 0.0f) m_FlySpeedToastTimer -= dt;
+
+		// Animation preview playback (moves the editor camera along the track).
+		// Paused while an offline render owns the raytracer.
+		if (!m_IsExporting) {
+			m_AnimationPanel.update_preview(dt, m_Animation,
+				m_EditorCameraTransform, m_EditorCamera, m_Raytracer,
+				m_SceneState == SceneState::Render);
+		}
 
 		// OS-Level File Dropping
 		if (IsFileDropped()) {
@@ -286,18 +325,29 @@ namespace editor {
 		// ==========================================
 		// DEFERRED UI LAYOUT LOADING & SAVING
 		// ==========================================
-		if (m_WantsToSaveLayout) {
-			std::string path = me::vfs::resolve("root://custom_layout.ini");
+		// Layout files are saved/loaded by name so the same machinery serves the
+		// user's custom layout AND the automatic per-mode (Edit/Render) layouts.
+		if (!m_PendingLayoutSave.empty()) {
+			std::string path = me::vfs::resolve(m_PendingLayoutSave);
 			ImGui::SaveIniSettingsToDisk(path.c_str());
-			me::logger::info("Saved custom layout to: " + path);
-			m_WantsToSaveLayout = false;
+			me::logger::info("Saved layout to: " + path);
+			m_PendingLayoutSave.clear();
 		}
 
-		if (m_WantsToLoadLayout) {
-			std::string path = me::vfs::resolve("root://custom_layout.ini");
-			ImGui::LoadIniSettingsFromDisk(path.c_str());
-			me::logger::info("Loaded custom layout from: " + path);
-			m_WantsToLoadLayout = false;
+		if (!m_PendingLayoutLoad.empty()) {
+			std::string path = me::vfs::resolve(m_PendingLayoutLoad);
+			// A mode layout that was never saved simply keeps the current layout.
+			if (std::filesystem::exists(path)) {
+				ImGui::LoadIniSettingsFromDisk(path.c_str());
+				me::logger::info("Loaded layout from: " + path);
+			}
+			m_PendingLayoutLoad.clear();
+		}
+
+		if (!m_PendingLayoutLoadMem.empty()) {
+			// In-session stash from the mode we're returning to.
+			ImGui::LoadIniSettingsFromMemory(m_PendingLayoutLoadMem.c_str(), m_PendingLayoutLoadMem.size());
+			m_PendingLayoutLoadMem.clear();
 		}
 
 		ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
@@ -305,8 +355,10 @@ namespace editor {
 		draw_menu_bar();
 		draw_toolbar();
 
-		// --- Draw Panels ---
-		m_HierarchyPanel.on_imgui_render(m_CommandHistory);
+		// --- Draw Panels (per-mode visibility; toggled in View > Panels) ---
+		PanelSet& panels = active_panels();
+
+		if (panels.hierarchy) m_HierarchyPanel.on_imgui_render(m_CommandHistory);
 		me::Entity selected_entity = m_HierarchyPanel.get_selected_entity();
 
 		// Keep orbit target in sync with whatever is selected
@@ -315,9 +367,17 @@ namespace editor {
 			if (t) m_OrbitTarget = { t->position.x, t->position.y, t->position.z };
 		}
 
-		m_InspectorPanel.on_imgui_render(selected_entity, m_CommandHistory);
-		m_BrowserPanel.on_imgui_render();
-		m_ConsolePanel.on_imgui_render();
+		if (panels.inspector) m_InspectorPanel.on_imgui_render(selected_entity, m_CommandHistory);
+		if (panels.browser) m_BrowserPanel.on_imgui_render();
+		if (panels.console) m_ConsolePanel.on_imgui_render();
+		if (panels.animation) {
+			m_AnimationPanel.on_imgui_render(m_Animation,
+				m_EditorCameraTransform, m_EditorCamera, m_Raytracer,
+				selected_entity,
+				m_SceneState == SceneState::Render,
+				m_CommandHistory,
+				[this]() { m_ShowAnimRenderModal = true; });
+		}
 
 		int active_gizmo = (m_SceneState == SceneState::Edit) ? m_GizmoType : -1;
 		bool is_rendering = (m_SceneState == SceneState::Render);
@@ -328,30 +388,31 @@ namespace editor {
 			selected_entity,
 			active_gizmo,
 			m_CommandHistory,
-			m_Raytracer.get_texture(), // Pass the texture pointer
-			is_rendering,              // Pass the state boolean
-			&m_Raytracer               // For click-to-focus (DoF)
+			m_Raytracer.get_texture(),            // Pass the texture pointer
+			is_rendering,                         // Pass the state boolean
+			m_SceneState == SceneState::Play,     // For the mode-colored frame
+			&m_Raytracer                          // For click-to-focus (DoF)
 		);
 
 		// ==========================================
 		// RAYTRACER SETTINGS WINDOW
 		// ==========================================
-		if (m_SceneState == SceneState::Render) {
-			// Recreate the output texture when the viewport is resized (window or panel drag).
-			// Uses resize() — not on_stop/on_start — to preserve the shader and SSBOs.
-			// Skipped while exporting: the raytracer renders at the export resolution
-			// then, and this tracker would stomp it back to viewport size (resetting
-			// accumulation and silently exporting at viewport resolution).
-			if (!m_IsExporting) {
-				int new_w = (int)(m_ViewportPanel.get_bounds().x * m_Raytracer.resolution_scale);
-				int new_h = (int)(m_ViewportPanel.get_bounds().y * m_Raytracer.resolution_scale);
-				if (new_w < 1) new_w = 1;
-				if (new_h < 1) new_h = 1;
-				if (new_w != m_Raytracer.get_width() || new_h != m_Raytracer.get_height()) {
-					m_Raytracer.resize(new_w, new_h);
-				}
+		// Keep the raytracer sized to the viewport in Render mode — independent of
+		// whether the settings window itself is visible. Skipped while exporting:
+		// the offline render owns the resolution then, and this tracker would
+		// stomp it back to viewport size (resetting accumulation and silently
+		// exporting at viewport resolution).
+		if (m_SceneState == SceneState::Render && !m_IsExporting) {
+			int new_w = (int)(m_ViewportPanel.get_bounds().x * m_Raytracer.resolution_scale);
+			int new_h = (int)(m_ViewportPanel.get_bounds().y * m_Raytracer.resolution_scale);
+			if (new_w < 1) new_w = 1;
+			if (new_h < 1) new_h = 1;
+			if (new_w != m_Raytracer.get_width() || new_h != m_Raytracer.get_height()) {
+				m_Raytracer.resize(new_w, new_h);
 			}
+		}
 
+		if (m_SceneState == SceneState::Render && panels.raytracer_settings) {
 			ImGui::Begin("Raytracer Settings");
 
 			// --- BACKEND TOGGLE ---
@@ -582,10 +643,31 @@ namespace editor {
 		me::fs::create_directory("game://models");
 		me::fs::create_directory("game://textures");
 		me::fs::create_directory("game://audio");
+
+		// Seed the new project with the shipped demo (scene + model + script +
+		// sound + a sample animation), so the first thing a user sees shows both
+		// halves of the engine: press Play and SPACE makes the cube jump; press
+		// Render and the same scene path-traces with glass, a mirror and glow.
+		std::error_code ec;
+		std::filesystem::path demo_dir = std::filesystem::path(GetApplicationDirectory()) / "assets" / "demo";
+		if (std::filesystem::exists(demo_dir)) {
+			std::filesystem::copy(demo_dir, path / "assets",
+				std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
+			if (ec) me::logger::warn("Could not seed the demo project: " + ec.message());
+		}
+
 		load_project(path);
 	}
 
 	void EditorApp::load_project(const std::filesystem::path& path) {
+		// Guard every entry point (hub, recents, future CLI): loading a project
+		// folder that doesn't exist would crash the content browser's iterator.
+		if (!std::filesystem::exists(path)) {
+			me::logger::error("Project folder not found: " + path.generic_string());
+			return;
+		}
+
+		m_HubPanel.unload_background(); // leaving the hub — free its texture
 		add_recent_project(path.generic_string());
 
 		m_ProjectPath = path;
@@ -649,8 +731,10 @@ namespace editor {
 
 	void EditorApp::save_scene() {
 		me::scene_manager::save(m_CurrentScenePath);
+		save_animation_sidecar();
 		m_SceneDirty = false;
 	}
+
 
 	void EditorApp::open_save_as_modal() {
 		m_ShowSaveAsModal = true;
@@ -660,6 +744,75 @@ namespace editor {
 		if (auto pos = name.rfind(".json"); pos != std::string::npos) name = name.substr(0, pos);
 		if (name.empty()) name = "my_new_scene";
 		snprintf(m_NewSceneInput, sizeof(m_NewSceneInput), "%s", name.c_str());
+	}
+
+	// Edit and Render each keep their own dock layout; crossing between them
+	// stashes the layout being left IN MEMORY (the session keeps your
+	// arrangement, but disk only changes via Save Layout) and brings in the
+	// other mode's layout: session stash first, then the user's saved file,
+	// then the default shipped in assets/layouts/.
+	void EditorApp::switch_mode_layout(SceneState from, SceneState to) {
+		if (!m_AutoModeLayouts) return;
+		bool from_render = (from == SceneState::Render);
+		bool to_render = (to == SceneState::Render);
+		if (from_render == to_render) return; // same layout family — nothing to swap
+
+		size_t len = 0;
+		const char* ini = ImGui::SaveIniSettingsToMemory(&len);
+		(from_render ? m_LayoutMemRender : m_LayoutMemEdit).assign(ini, len);
+
+		std::string& stash = to_render ? m_LayoutMemRender : m_LayoutMemEdit;
+		if (!stash.empty()) {
+			m_PendingLayoutLoadMem = stash;
+			return;
+		}
+
+		const char* user_file = to_render ? "root://layout_render.ini" : "root://layout_edit.ini";
+		const char* shipped = to_render ? "root://assets/layouts/layout_render.ini" : "root://assets/layouts/layout_edit.ini";
+		m_PendingLayoutLoad = std::filesystem::exists(me::vfs::resolve(user_file)) ? user_file : shipped;
+	}
+
+	void EditorApp::save_current_layout() {
+		m_PendingLayoutSave = (m_SceneState == SceneState::Render)
+			? "root://layout_render.ini" : "root://layout_edit.ini";
+	}
+
+	void EditorApp::reset_layout_to_default() {
+		bool render = (m_SceneState == SceneState::Render);
+		(render ? m_LayoutMemRender : m_LayoutMemEdit).clear(); // drop the session stash
+		m_PendingLayoutLoad = render
+			? "root://assets/layouts/layout_render.ini" : "root://assets/layouts/layout_edit.ini";
+	}
+
+	// Exports the current arrangement as the app's shipped default (used by
+	// fresh installs that have no saved layout yet). Written into the runtime
+	// assets folder; copy assets/layouts/ back into editor/assets/ in the repo
+	// to make it part of the source tree.
+	void EditorApp::save_layout_as_default() {
+		std::filesystem::path dir = me::vfs::resolve("root://assets/layouts");
+		std::error_code ec;
+		std::filesystem::create_directories(dir, ec);
+
+		bool render = (m_SceneState == SceneState::Render);
+		std::filesystem::path file = dir / (render ? "layout_render.ini" : "layout_edit.ini");
+		ImGui::SaveIniSettingsToDisk(file.string().c_str());
+
+		// Ship the panel-visibility defaults along with the dock layout.
+		nlohmann::json pj;
+		auto write_panels = [](const PanelSet& p) {
+			return nlohmann::json{
+				{"hierarchy", p.hierarchy}, {"inspector", p.inspector},
+				{"browser", p.browser}, {"console", p.console},
+				{"animation", p.animation}, {"raytracer_settings", p.raytracer_settings}
+			};
+			};
+		pj["panels_edit"] = write_panels(m_PanelsEdit);
+		pj["panels_render"] = write_panels(m_PanelsRender);
+		std::ofstream ofs(dir / "default_panels.json");
+		if (ofs) ofs << pj.dump(4);
+
+		me::logger::info("Saved shipped default (" + std::string(render ? "Render" : "Edit") + ") to: " + file.string());
+		me::logger::info("To ship it with the app, copy assets/layouts/ into editor/assets/ in the repo.");
 	}
 
 	void EditorApp::apply_frame_pacing() {
@@ -680,6 +833,7 @@ namespace editor {
 			m_Raytracer.on_stop();
 			m_SceneState = SceneState::Edit;
 			apply_frame_pacing();
+			switch_mode_layout(SceneState::Render, SceneState::Edit);
 		}
 		me::scene_manager::load(vfs_path); // SceneLoadedEvent does the bookkeeping
 		me::logger::info("Opened scene: " + vfs_path);
@@ -742,6 +896,8 @@ namespace editor {
 			if (auto pos = scene.find_last_of('/'); pos != std::string::npos) scene = scene.substr(pos + 1);
 			title += " - " + scene;
 			if (m_SceneDirty) title += " *";
+			if (m_SceneState == SceneState::Play)        title += "  [PLAY]";
+			else if (m_SceneState == SceneState::Render) title += "  [RENDER]";
 		}
 		if (title != m_LastWindowTitle) {
 			SetWindowTitle(title.c_str());
@@ -762,8 +918,10 @@ namespace editor {
 	}
 
 	void EditorApp::on_stop() {
+		SceneState prev = m_SceneState;
 		m_SceneState = SceneState::Edit;
 		apply_frame_pacing();
+		switch_mode_layout(prev, SceneState::Edit); // no-op when stopping Play
 		me::logger::info("Mode set to: EDIT");
 		me::set_playing(false);
 		me::get_event_bus().publish<me::events::PlayStateChangedEvent>(false);
@@ -796,7 +954,102 @@ namespace editor {
 		m_CommandHistory.Clear();
 	}
 
+	// Packaging, Godot-style: the runtime executable was compiled when the
+	// engine was built; exporting only copies files. Output layout:
+	//   <out>/<Name>.exe        the renamed game runtime
+	//   <out>/game_config.json  window settings + boot scene
+	//   <out>/assets/shaders/   engine runtime shaders   (game mounts engine://)
+	//   <out>/data/             this project's content   (game mounts game://)
+	void EditorApp::export_game() {
+		namespace fs = std::filesystem;
+		std::error_code ec;
+
+		fs::path exe_dir = GetApplicationDirectory();
+#ifdef _WIN32
+		fs::path runtime = exe_dir / "game.exe";
+#else
+		fs::path runtime = exe_dir / "game";
+#endif
+		if (!fs::exists(runtime)) {
+			me::logger::error("Game runtime not found next to the editor (" + runtime.string() + ").");
+			me::logger::error("Packaged install: restore the missing file. Source build: build the 'game' target.");
+			return;
+		}
+
+		std::string name = m_ExportGameName[0] ? std::string(m_ExportGameName) : "game";
+		fs::path out = m_ExportGameDir;
+		fs::create_directories(out, ec);
+		if (!fs::exists(out)) {
+			me::logger::error("Could not create the export folder: " + out.string());
+			return;
+		}
+
+		// 1. The runtime, renamed to the game.
+#ifdef _WIN32
+		fs::path game_exe = out / (name + ".exe");
+#else
+		fs::path game_exe = out / name;
+#endif
+		fs::copy_file(runtime, game_exe, fs::copy_options::overwrite_existing, ec);
+		if (ec) {
+			me::logger::error("Export failed copying the runtime: " + ec.message());
+			return;
+		}
+
+		// 2. Engine runtime shaders.
+		fs::create_directories(out / "assets" / "shaders", ec);
+		fs::copy(exe_dir / "assets" / "shaders", out / "assets" / "shaders",
+			fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+		if (ec) me::logger::warn("Export: copying engine shaders reported: " + ec.message());
+
+		// 3. The project's content. Start clean so deleted assets don't linger.
+		fs::remove_all(out / "data", ec);
+		ec.clear();
+		fs::copy(m_ProjectPath / "assets", out / "data",
+			fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+		if (ec) {
+			me::logger::error("Export failed copying project assets: " + ec.message());
+			return;
+		}
+		fs::remove(out / "data" / "scenes" / ".temp_play.json", ec); // editor-only scratch
+
+		// 4. The game's boot config.
+		nlohmann::json j;
+		j["name"] = name;
+		j["main_scene"] = m_ExportGameScene.empty() ? "game://scenes/main.json" : m_ExportGameScene;
+		j["width"] = std::max(320, m_ExportGameW);
+		j["height"] = std::max(240, m_ExportGameH);
+		j["vsync"] = m_ExportGameVsync;
+		std::ofstream ofs(out / "game_config.json");
+		if (ofs) ofs << j.dump(4);
+
+		me::logger::info("Game exported to: " + out.string());
+		editor::utils::open_folder_dialog(out.string());
+	}
+
 	void EditorApp::load_engine_config() {
+		// First run (no per-user config yet): adopt the shipped panel-visibility
+		// defaults so a fresh install matches the author's setup.
+		if (!std::filesystem::exists("engine_config.json")) {
+			std::ifstream dfs("assets/layouts/default_panels.json");
+			if (dfs.is_open()) {
+				try {
+					nlohmann::json dj;
+					dfs >> dj;
+					auto read_defaults = [](PanelSet& p, const nlohmann::json& pj) {
+						p.hierarchy = pj.value("hierarchy", p.hierarchy);
+						p.inspector = pj.value("inspector", p.inspector);
+						p.browser = pj.value("browser", p.browser);
+						p.console = pj.value("console", p.console);
+						p.animation = pj.value("animation", p.animation);
+						p.raytracer_settings = pj.value("raytracer_settings", p.raytracer_settings);
+						};
+					if (dj.contains("panels_edit"))   read_defaults(m_PanelsEdit, dj["panels_edit"]);
+					if (dj.contains("panels_render")) read_defaults(m_PanelsRender, dj["panels_render"]);
+				} catch (...) {}
+			}
+		}
+
 		std::ifstream ifs("engine_config.json");
 		if (ifs.is_open()) {
 			nlohmann::json j;
@@ -807,6 +1060,18 @@ namespace editor {
 					m_HubPanel.set_recent_projects(m_RecentProjects); // Pass to hub!
 				}
 				if (j.contains("ui_scale")) ImGui::GetIO().FontGlobalScale = j["ui_scale"].get<float>();
+				if (j.contains("auto_mode_layouts")) m_AutoModeLayouts = j["auto_mode_layouts"].get<bool>();
+
+				auto read_panels = [](PanelSet& p, const nlohmann::json& pj) {
+					p.hierarchy = pj.value("hierarchy", p.hierarchy);
+					p.inspector = pj.value("inspector", p.inspector);
+					p.browser = pj.value("browser", p.browser);
+					p.console = pj.value("console", p.console);
+					p.animation = pj.value("animation", p.animation);
+					p.raytracer_settings = pj.value("raytracer_settings", p.raytracer_settings);
+					};
+				if (j.contains("panels_edit"))   read_panels(m_PanelsEdit, j["panels_edit"]);
+				if (j.contains("panels_render")) read_panels(m_PanelsRender, j["panels_render"]);
 			} catch (...) {}
 		}
 	}
@@ -815,6 +1080,17 @@ namespace editor {
 		nlohmann::json j;
 		j["recent_projects"] = m_RecentProjects;
 		j["ui_scale"] = ImGui::GetIO().FontGlobalScale;
+		j["auto_mode_layouts"] = m_AutoModeLayouts;
+
+		auto write_panels = [](const PanelSet& p) {
+			return nlohmann::json{
+				{"hierarchy", p.hierarchy}, {"inspector", p.inspector},
+				{"browser", p.browser}, {"console", p.console},
+				{"animation", p.animation}, {"raytracer_settings", p.raytracer_settings}
+			};
+			};
+		j["panels_edit"] = write_panels(m_PanelsEdit);
+		j["panels_render"] = write_panels(m_PanelsRender);
 		std::ofstream ofs("engine_config.json");
 		ofs << j.dump(4);
 	}
@@ -862,6 +1138,16 @@ namespace editor {
 
 				if (ImGui::MenuItem("Save Scene", "Ctrl+S")) save_scene();
 				if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S")) open_save_as_modal();
+
+				ImGui::Separator();
+				if (ImGui::MenuItem("Export Game...")) {
+					m_ShowExportGameModal = true;
+					snprintf(m_ExportGameName, sizeof(m_ExportGameName), "%s", m_ProjectPath.filename().string().c_str());
+					snprintf(m_ExportGameDir, sizeof(m_ExportGameDir), "%s", (m_ProjectPath / "export").string().c_str());
+					m_ExportGameScene = me::fs::exists("game://scenes/main.json")
+						? "game://scenes/main.json" : m_CurrentScenePath;
+				}
+
 				ImGui::Separator();
 				if (ImGui::MenuItem("Exit")) request_exit();
 				ImGui::EndMenu();
@@ -881,12 +1167,29 @@ namespace editor {
 			// --- Layout Menu ---
 			if (ImGui::BeginMenu("Layout")) {
 
-				if (ImGui::MenuItem("Save Custom Layout")) {
-					m_WantsToSaveLayout = true; // Tell the engine to save it later
+				// Explicit-save model: arrange freely, then save. The saved
+				// layout is what comes back on the next start; unsaved changes
+				// last only for this session.
+				bool render_mode = (m_SceneState == SceneState::Render);
+				if (ImGui::MenuItem(render_mode ? "Save Layout (Render)" : "Save Layout (Edit)")) {
+					save_current_layout();
+				}
+				if (ImGui::MenuItem("Reset Layout to Default")) {
+					reset_layout_to_default();
 				}
 
-				if (ImGui::MenuItem("Load Custom Layout")) {
-					m_WantsToLoadLayout = true; // Tell the engine to load it later
+				ImGui::Separator();
+				// Edit and Render each remember their own panel arrangement and
+				// swap automatically when switching modes (Play shares Edit's).
+				if (ImGui::MenuItem("Per-Mode Layouts (Auto)", nullptr, &m_AutoModeLayouts)) {
+					save_engine_config();
+				}
+
+				ImGui::Separator();
+				// Exports the current arrangement (+ panel visibility) as the
+				// default a fresh install starts with.
+				if (ImGui::MenuItem("Save As Shipped Default")) {
+					save_layout_as_default();
 				}
 
 				ImGui::Separator();
@@ -917,7 +1220,31 @@ namespace editor {
 				}
 
 				ImGui::MenuItem("Stats Overlay", nullptr, &m_ShowStats);
+				ImGui::MenuItem("Controls", nullptr, &m_ShowControlsWindow);
 
+				// Per-mode panel visibility — each mode remembers its own set, so
+				// Edit can stay a scene-building workspace and Render a film one.
+				ImGui::Separator();
+				ImGui::TextDisabled(m_SceneState == SceneState::Render ? "Panels (Render mode)" : "Panels (Edit mode)");
+				PanelSet& p = active_panels();
+				bool changed = false;
+				changed |= ImGui::MenuItem("Scene Hierarchy", nullptr, &p.hierarchy);
+				changed |= ImGui::MenuItem("Inspector", nullptr, &p.inspector);
+				changed |= ImGui::MenuItem("Content Browser", nullptr, &p.browser);
+				changed |= ImGui::MenuItem("Console", nullptr, &p.console);
+				changed |= ImGui::MenuItem("Animation", nullptr, &p.animation);
+				if (m_SceneState == SceneState::Render)
+					changed |= ImGui::MenuItem("Raytracer Settings", nullptr, &p.raytracer_settings);
+				if (changed) save_engine_config();
+
+				ImGui::EndMenu();
+			}
+
+			// --- Help Menu ---
+			if (ImGui::BeginMenu("Help")) {
+				ImGui::MenuItem("Controls", nullptr, &m_ShowControlsWindow);
+				ImGui::Separator();
+				if (ImGui::MenuItem("About Mini Engine Raylib")) m_ShowAboutModal = true;
 				ImGui::EndMenu();
 			}
 
@@ -984,6 +1311,7 @@ namespace editor {
 			if (ImGui::Button("RENDER", ImVec2(60, button_size))) {
 				m_SceneState = SceneState::Render;
 				apply_frame_pacing(); // uncap: every frame is a raytrace sample
+				switch_mode_layout(SceneState::Edit, SceneState::Render);
 
 				// Get the raw bounds of the viewport
 				float raw_width = m_ViewportPanel.get_bounds().x;
@@ -1056,9 +1384,18 @@ namespace editor {
 				m_Raytracer.on_stop();           // Free the VRAM and vectors
 				m_SceneState = SceneState::Edit; // Return to Edit mode safely
 				apply_frame_pacing();            // re-cap to the monitor refresh
+				switch_mode_layout(SceneState::Render, SceneState::Edit);
 			}
 			ImGui::PopStyleColor();
 		}
+
+		// Mode badge (right-aligned): mirrors the viewport frame color.
+		const char* mode_label = "EDIT";
+		ImVec4 mode_col = ImVec4(0.62f, 0.62f, 0.62f, 1.0f);
+		if (m_SceneState == SceneState::Play) { mode_label = "PLAYING";   mode_col = ImVec4(0.35f, 0.8f, 0.45f, 1.0f); }
+		if (m_SceneState == SceneState::Render) { mode_label = "RENDERING"; mode_col = ImVec4(0.72f, 0.45f, 0.95f, 1.0f); }
+		ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(mode_label).x - 14.0f);
+		ImGui::TextColored(mode_col, "%s", mode_label);
 
 		ImGui::End();
 		ImGui::PopStyleVar(1);
@@ -1153,6 +1490,102 @@ namespace editor {
 		}
 
 		// ==========================================
+		// EXPORT GAME MODAL
+		// ==========================================
+		if (m_ShowExportGameModal) ImGui::OpenPopup("Export Game");
+		if (ImGui::BeginPopupModal("Export Game", &m_ShowExportGameModal, ImGuiWindowFlags_AlwaysAutoResize)) {
+			ImGui::TextDisabled("Packages the prebuilt game runtime together with this project's");
+			ImGui::TextDisabled("assets into a standalone folder. No compilation involved.");
+			ImGui::Dummy(ImVec2(0, 6));
+
+			ImGui::InputText("Game Name", m_ExportGameName, sizeof(m_ExportGameName));
+
+			ImGui::InputText("Output Folder", m_ExportGameDir, sizeof(m_ExportGameDir));
+			ImGui::SameLine();
+			if (ImGui::Button("...")) {
+				std::string picked = editor::utils::select_folder_dialog("Choose the export folder", m_ExportGameDir);
+				if (!picked.empty()) snprintf(m_ExportGameDir, sizeof(m_ExportGameDir), "%s", picked.c_str());
+			}
+
+			// Which scene the game boots into.
+			if (ImGui::BeginCombo("Main Scene", m_ExportGameScene.c_str())) {
+				std::filesystem::path scenes_dir = m_ProjectPath / "assets" / "scenes";
+				if (std::filesystem::exists(scenes_dir)) {
+					for (const auto& entry : std::filesystem::directory_iterator(scenes_dir)) {
+						if (!entry.is_regular_file() || entry.path().extension() != ".json") continue;
+						std::string fname = entry.path().filename().string();
+						if (fname == ".temp_play.json" || fname.ends_with(".anim.json")) continue;
+						std::string vfs_path = "game://scenes/" + fname;
+						if (ImGui::Selectable(fname.c_str(), vfs_path == m_ExportGameScene))
+							m_ExportGameScene = vfs_path;
+					}
+				}
+				ImGui::EndCombo();
+			}
+
+			ImGui::InputInt("Window Width", &m_ExportGameW);
+			ImGui::InputInt("Window Height", &m_ExportGameH);
+			ImGui::Checkbox("VSync", &m_ExportGameVsync);
+
+			ImGui::Dummy(ImVec2(0, 10));
+			if (ImGui::Button("Export", ImVec2(120, 0))) {
+				export_game();
+				m_ShowExportGameModal = false;
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::SameLine();
+			if (ImGui::Button("Cancel", ImVec2(120, 0))) { m_ShowExportGameModal = false; ImGui::CloseCurrentPopup(); }
+			ImGui::EndPopup();
+		}
+
+		// ==========================================
+		// ABOUT MODAL + CONTROLS WINDOW (Help menu)
+		// ==========================================
+		if (m_ShowAboutModal) ImGui::OpenPopup("About Mini Engine Raylib");
+		if (ImGui::BeginPopupModal("About Mini Engine Raylib", &m_ShowAboutModal, ImGuiWindowFlags_AlwaysAutoResize)) {
+			ImGui::Text("Mini Engine Raylib %s", ME_VERSION_STRING);
+			ImGui::TextDisabled("A small scene engine built on raylib.");
+			ImGui::TextDisabled("Build a scene once: play it as a game, or render it as film.");
+			ImGui::Dummy(ImVec2(0, 6));
+			ImGui::Text("(c) 2025-2026 Vasco Alves - MIT License");
+			ImGui::TextDisabled("Built on raylib, Dear ImGui, Jolt Physics, Lua/sol3,");
+			ImGui::TextDisabled("nlohmann_json, ImGuizmo and mini-ecs.");
+			ImGui::Dummy(ImVec2(0, 8));
+			if (ImGui::Button("Close", ImVec2(120, 0))) { m_ShowAboutModal = false; ImGui::CloseCurrentPopup(); }
+			ImGui::EndPopup();
+		}
+
+		if (m_ShowControlsWindow) {
+			ImGui::SetNextWindowSize(ImVec2(460, 0), ImGuiCond_FirstUseEver);
+			if (ImGui::Begin("Controls", &m_ShowControlsWindow, ImGuiWindowFlags_AlwaysAutoResize)) {
+				if (ImGui::BeginTable("##controls", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
+					auto row = [](const char* action, const char* input) {
+						ImGui::TableNextRow();
+						ImGui::TableNextColumn(); ImGui::TextUnformatted(action);
+						ImGui::TableNextColumn(); ImGui::TextDisabled("%s", input);
+						};
+					row("Fly camera", "Hold RMB + WASD, Q/E up/down");
+					row("Camera sprint / precision", "Shift / Ctrl while flying");
+					row("Tune fly speed", "Scroll while flying");
+					row("Orbit camera", "RMB + Alt");
+					row("Focus selected", "F");
+					row("Gizmo: none/move/rotate/scale", "Q / W / R / S  (Ctrl = snap)");
+					row("Select object", "Left-click in viewport");
+					row("Rename entity", "F2 or double-click in hierarchy");
+					row("Duplicate / delete", "Ctrl+D / Del");
+					row("Undo / redo", "Ctrl+Z / Ctrl+Y or Ctrl+Shift+Z");
+					row("Save / Save As / new scene", "Ctrl+S / Ctrl+Shift+S / Ctrl+N");
+					row("Play / stop", "Ctrl+P or the toolbar");
+					row("Fine-tune drag fields", "Hold Alt (10x finer), Ctrl+click to type");
+					row("Timeline zoom", "Ctrl+scroll over the timeline");
+					row("DoF focus (Render mode)", "Click an object in the viewport");
+					ImGui::EndTable();
+				}
+			}
+			ImGui::End();
+		}
+
+		// ==========================================
 		// UNSAVED CHANGES GUARD (Exit / New Scene / Open Scene)
 		// ==========================================
 		if (m_ShowUnsavedModal) ImGui::OpenPopup("Unsaved Changes");
@@ -1182,163 +1615,7 @@ namespace editor {
 			ImGui::EndPopup();
 		}
 
-		// ==========================================
-		// 2. EXPORT RENDER MODAL (Settings)
-		// ==========================================
-		if (m_ShowExportModal) ImGui::OpenPopup("Export High-Res Render");
-		if (ImGui::BeginPopupModal("Export High-Res Render", &m_ShowExportModal, ImGuiWindowFlags_AlwaysAutoResize)) {
-
-			ImGui::Text("Export Settings");
-			ImGui::Separator();
-			ImGui::Dummy(ImVec2(0, 5));
-
-			// These apply ONLY to the export — the viewport keeps its own
-			// resolution / samples / bounces and gets them back afterwards.
-			ImGui::InputInt("Width", &m_Raytracer.export_width);
-			ImGui::InputInt("Height", &m_Raytracer.export_height);
-			ImGui::InputInt("Samples (Rays per Pixel)", &m_Raytracer.export_samples);
-			ImGui::InputInt("Max Bounces", &m_Raytracer.export_bounces);
-
-			// Workload estimate — helps pick a backend before committing. GPU
-			// work is dispatched in short row bands (so a heavy frame can't trip
-			// the OS GPU watchdog), but very large exports still tax the UI.
-			{
-				double mpx = (double)m_Raytracer.export_width * (double)m_Raytracer.export_height / 1e6;
-				double work = mpx * (double)std::max(1, m_Raytracer.export_bounces);
-				int vram_mb = (int)(mpx * 8.0) + 1; // output image + readback staging
-
-				ImGui::Dummy(ImVec2(0, 6));
-				ImGui::Separator();
-				ImGui::TextDisabled("Estimate: %.1f MP/sample  |  ~%d MB VRAM  |  %d samples",
-					mpx, vram_mb, m_Raytracer.export_samples);
-
-				if (m_Raytracer.current_backend == me::systems::RenderBackend::GPU) {
-					if (work > 120.0) {
-						ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
-							"Very heavy GPU export — the UI will be sluggish while it runs.");
-						ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
-							"If your GPU driver still resets, switch the Backend to CPU.");
-					} else if (work > 40.0) {
-						ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f),
-							"Heavy GPU export — rendered in bands; the UI may stutter.");
-					}
-				} else if (work > 8.0) {
-					ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f),
-						"CPU at this size will be slow — the GPU backend renders in");
-					ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.4f, 1.0f),
-						"watchdog-safe bands and is usually the faster, safe choice.");
-				}
-			}
-
-			ImGui::Dummy(ImVec2(0, 10));
-
-			if (ImGui::Button("Render & Save", ImVec2(120, 0))) {
-
-				// 1. Create directory and filename
-				std::string renders_dir = (m_ProjectPath / "renders").string();
-				if (!me::fs::exists(renders_dir)) me::fs::create_directory(renders_dir);
-
-				auto now = std::time(nullptr);
-				char time_str[64];
-				std::tm tm_buf{};
-#ifdef _WIN32
-				localtime_s(&tm_buf, &now);
-#else
-				localtime_r(&now, &tm_buf);
-#endif
-				std::strftime(time_str, sizeof(time_str), "%Y%m%d_%H%M%S", &tm_buf);
-				m_ExportPath = (m_ProjectPath / "renders" / (std::string("render_") + time_str + ".png")).string();
-
-				// 2. Sanitize the export settings (InputInt allows anything).
-				if (m_Raytracer.export_width < 1)  m_Raytracer.export_width = 1;
-				if (m_Raytracer.export_height < 1) m_Raytracer.export_height = 1;
-				if (m_Raytracer.export_samples < 2) m_Raytracer.export_samples = 2;
-				if (m_Raytracer.export_bounces < 1)  m_Raytracer.export_bounces = 1;
-				if (m_Raytracer.export_bounces > 16) m_Raytracer.export_bounces = 16;
-
-				// 3. Save the viewport state the export overrides.
-				m_PreviewW = m_Raytracer.get_width();
-				m_PreviewH = m_Raytracer.get_height();
-				m_ExportSavedPreviewSamples = m_Raytracer.preview_samples;
-				m_ExportSavedAccumulate = m_Raytracer.accumulate;
-				m_ExportSavedBounces = m_Raytracer.max_bounces;
-
-				// 4. Switch the raytracer to the export configuration. resize()
-				// preserves the shader + SSBOs and restarts accumulation; the
-				// viewport pass and the viewport-size tracker pause while
-				// m_IsExporting is set, so the export owns every render.
-				m_Raytracer.resize(m_Raytracer.export_width, m_Raytracer.export_height);
-				m_Raytracer.accumulate = true;
-				m_Raytracer.preview_samples = m_Raytracer.export_samples;
-				m_Raytracer.max_bounces = m_Raytracer.export_bounces;
-
-				// 5. Hand rendering over to the progress modal.
-				m_IsExporting = true;
-
-				m_ShowExportModal = false;
-				ImGui::CloseCurrentPopup();
-			}
-
-			ImGui::SameLine();
-			if (ImGui::Button("Cancel", ImVec2(120, 0))) {
-				m_ShowExportModal = false;
-				ImGui::CloseCurrentPopup();
-			}
-			ImGui::EndPopup();
-		}
-
-		// ==========================================
-		// EXPORTING PROGRESS BAR (The Render Loop)
-		// ==========================================
-		if (m_IsExporting) ImGui::OpenPopup("Rendering...");
-
-		if (ImGui::BeginPopupModal("Rendering...", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-
-			// Restores everything the export overrode. resize() back to the
-			// viewport resolution also restarts the viewport accumulation.
-			auto finish_export = [&]() {
-				m_Raytracer.resize(m_PreviewW, m_PreviewH);
-				m_Raytracer.preview_samples = m_ExportSavedPreviewSamples;
-				m_Raytracer.accumulate = m_ExportSavedAccumulate;
-				m_Raytracer.max_bounces = m_ExportSavedBounces;
-				m_IsExporting = false;
-			};
-
-			ImGui::Text("Rendering High-Resolution Image (%dx%d)", m_Raytracer.export_width, m_Raytracer.export_height);
-			ImGui::Dummy(ImVec2(0, 5));
-
-			// Progress reads the raytracer's own accumulation counter, so the
-			// bar can never drift from what was actually rendered.
-			int done = m_Raytracer.get_accumulated_frames();
-			float progress = (float)done / (float)m_Raytracer.export_samples;
-			if (progress > 1.0f) progress = 1.0f;
-			ImGui::ProgressBar(progress, ImVec2(300, 20));
-			ImGui::Text("Calculating sample: %d / %d", done, m_Raytracer.export_samples);
-
-			// Render a chunk of samples per UI frame, sized so each UI frame does
-			// roughly constant work: small exports batch up to 10 samples, huge
-			// ones take 1 per frame so the Cancel button stays responsive.
-			long long px = (long long)m_Raytracer.export_width * (long long)m_Raytracer.export_height;
-			int samples_per_frame = (int)std::clamp(4'000'000LL / std::max(1LL, px), 1LL, 10LL);
-			for (int i = 0; i < samples_per_frame
-				&& m_Raytracer.get_accumulated_frames() < m_Raytracer.export_samples; ++i) {
-				m_Raytracer.on_update(me::get_registry(), m_EditorCamera, m_EditorCameraTransform);
-			}
-
-			if (m_Raytracer.get_accumulated_frames() >= m_Raytracer.export_samples) {
-				m_Raytracer.export_to_png(m_ExportPath);
-				finish_export();
-				ImGui::CloseCurrentPopup();
-			}
-
-			ImGui::Dummy(ImVec2(0, 5));
-			if (ImGui::Button("Cancel", ImVec2(300, 0))) {
-				finish_export(); // no PNG written
-				ImGui::CloseCurrentPopup();
-			}
-
-			ImGui::EndPopup();
-		}
+		draw_offline_render_modals();
 	}
 
 	// ====================================================================
