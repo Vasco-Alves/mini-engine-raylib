@@ -6,8 +6,9 @@
 #include <raylib.h>
 
 #include <mini-engine-raylib/core/logger.hpp>
-#include <mini-engine-raylib/ecs/components.hpp> 
+#include <mini-engine-raylib/ecs/components.hpp>
 
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -59,11 +60,15 @@ namespace editor {
         std::vector<std::unique_ptr<ICommand>> m_RedoStack;
 
     public:
+        // Called whenever the scene state changes (add, undo, or redo).
+        std::function<void()> on_scene_changed;
+
         // Executes a new command and pushes it to the Undo stack, clearing the Redo stack
         void AddCommand(std::unique_ptr<ICommand> command) {
             command->Execute();
             m_UndoStack.push_back(std::move(command));
             m_RedoStack.clear(); // A new action invalidates all future redos
+            if (on_scene_changed) on_scene_changed();
         }
 
         void Undo() {
@@ -78,6 +83,7 @@ namespace editor {
             // Revert the action and push to Redo stack
             command->Undo();
             m_RedoStack.push_back(std::move(command));
+            if (on_scene_changed) on_scene_changed();
         }
 
         void Redo() {
@@ -92,6 +98,7 @@ namespace editor {
             // Execute the action again and push back to Undo stack
             command->Execute();
             m_UndoStack.push_back(std::move(command));
+            if (on_scene_changed) on_scene_changed();
         }
 
         // Utility functions for UI button states

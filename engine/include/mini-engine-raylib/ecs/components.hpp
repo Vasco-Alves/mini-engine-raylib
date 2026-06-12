@@ -45,6 +45,7 @@ namespace me::components {
 		Vector3 last_position = { 0.0f, 0.0f, 0.0f };
 		Vector3 last_rotation = { 0.0f, 0.0f, 0.0f };
 		Vector3 last_scale = { 0.0f, 0.0f, 0.0f };
+		Quaternion last_rotation_quat = { 0.0f, 0.0f, 0.0f, 1.0f };
 
 		bool is_dirty = true;
 	};
@@ -52,11 +53,13 @@ namespace me::components {
 	struct LightComponent {
 		me::Color color = me::Color::white;
 		float intensity = 1.0f;
+		float radius = 0.1f; // world-space size of the light; drives soft-shadow penumbra (0 = hard)
 	};
 
 	struct DirectionalLightComponent {
 		me::Color color = me::Color::white;
 		float intensity = 1.0f;
+		float angular_radius = 1.0f; // sun half-angle in DEGREES; drives soft-shadow penumbra (0 = hard)
 	};
 
 	struct CameraComponent {
@@ -70,24 +73,6 @@ namespace me::components {
 		float mouse_sens = 0.5f;
 	};
 
-	struct Camera2DComponent {
-		Vector2 offset = { 0.0f, 0.0f };
-		float rotation = 0.0f;
-		float zoom = 1.0f;
-		bool active = true;
-	};
-
-	struct Shape2DComponent {
-		enum Type { Rectangle, Circle } type = Rectangle;
-		me::Color color = me::Color::white;
-		bool wireframe = false;
-	};
-
-	struct SpriteComponent {
-		me::assets::TextureId texture{};
-		me::Color tint = me::Color::white;
-	};
-
 	struct Shape3DComponent {
 		enum Type { Cube, Sphere, Plane } type = Cube;
 		me::Color color = me::Color::white;
@@ -97,6 +82,17 @@ namespace me::components {
 	struct Model3DComponent {
 		me::assets::ModelId model{};
 		me::Color tint = me::Color::white;
+	};
+
+	struct MaterialComponent {
+		me::Color albedo = me::Color::white; // Base color/tint
+		float roughness = 1.0f;              // 0.0 = Perfect Mirror, 1.0 = Matte/Chalk
+		float metallic = 0.0f;               // 0.0 = Plastic/Wood, 1.0 = Metal
+		float emission_power = 0.0f;         // Does it glow?
+		// Glass & Refraction
+		float transmission = 0.0f;           // 0.0 = Solid Opaque, 1.0 = Fully Transparent Glass
+		float ior = 1.5f;                    // Index of Refraction (1.0=Air, 1.33=Water, 1.5=Glass, 2.4=Diamond)
+		float tint_strength = 1.0f;          // Beer–Lambert density multiplier: 0 = always clear, 1 = physical, >1 = denser tint
 	};
 
 } // namespace me::components

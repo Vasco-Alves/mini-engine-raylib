@@ -15,7 +15,7 @@ namespace me::systems {
 		Vector3 listener_right = Vector3Normalize(Vector3CrossProduct(fallback_forward, fallback_up));
 
 		// 2. Check the ECS: Is there an active Game Camera overriding it?
-		me::entity::entity_id listener_id = 0xFFFFFFFF;
+		me::entity::entity_id listener_id = me::entity::null;
 		auto& listener_pool = registry.view<me::components::AudioListenerComponent>();
 
 		for (size_t i = 0; i < listener_pool.size(); ++i) {
@@ -25,7 +25,7 @@ namespace me::systems {
 			}
 		}
 
-		if (listener_id != 0xFFFFFFFF) {
+		if (listener_id != me::entity::null) {
 			auto* t = registry.try_get_component<me::components::TransformComponent>(listener_id);
 			auto* c = registry.try_get_component<me::components::CameraComponent>(listener_id);
 
@@ -47,7 +47,7 @@ namespace me::systems {
 		for (size_t i = 0; i < source_pool.size(); ++i) {
 			auto& source = source_pool.components[i];
 
-			// Handle Play On Awake (ONLY if the game is actively playing!)
+			// Handle Play On Awake (ONLY if the game is actively playing)
 			if (me::is_playing() && source.play_on_awake && !source.has_played_awake) {
 				source.trigger_play = true;
 				source.has_played_awake = true; // Ensure it only fires once

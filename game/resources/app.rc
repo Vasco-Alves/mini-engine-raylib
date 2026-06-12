@@ -1,0 +1,2 @@
+// Windows executable icon — exported games inherit it (id 1 = file icon).
+1 ICON "icon.ico"

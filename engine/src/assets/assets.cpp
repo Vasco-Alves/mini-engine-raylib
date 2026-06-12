@@ -3,6 +3,7 @@
 #include "mini-engine-raylib/core/vfs.hpp"
 #include "mini-engine-raylib/core/engine.hpp" 
 #include "mini-engine-raylib/ecs/components.hpp"
+#include "mini-engine-raylib/render/bvh.hpp"
 
 #include <unordered_map>
 #include <string>
@@ -46,6 +47,7 @@ namespace me::assets {
 		struct ModelRec {
 			::Model model{};
 			int refs = 0;
+			me::raytracing::TriangleBVH bvh; // Every loaded model gets its own BLAS for raytracing
 		};
 
 		std::unordered_map<std::uint32_t, ModelRec> s_models;
@@ -162,14 +164,21 @@ namespace me::assets {
 		return it->second.c_str();
 	}
 
+	const me::raytracing::TriangleBVH* internal_get_model_bvh(ModelId id) {
+		if (id.handle == 0) return nullptr;
+		auto it = s_models.find(id.handle);
+		if (it == s_models.end()) return nullptr;
+		return &it->second.bvh;
+	}
+
 	ModelId load_model(const char* uri) {
 		if (!uri || !*uri) return ModelId{ 0 };
 
-		// 1. Hash the string instantly
+		// Hash the string instantly
 		std::uint32_t handle = hash_path(uri);
 		auto it = s_models.find(handle);
 
-		// 2. Load from disk if it doesn't exist
+		// Load from disk if it doesn't exist
 		if (it == s_models.end()) {
 			const std::string path = me::vfs::resolve(uri);
 			::Model mod = LoadModel(path.c_str());
@@ -177,10 +186,18 @@ namespace me::assets {
 			// Raylib leaves mesh count at 0 if the load fails
 			if (mod.meshCount == 0) return ModelId{ 0 };
 
-			s_models[handle] = ModelRec{ mod, 1 };
+			// Create the record
+			ModelRec rec;
+			rec.model = mod;
+			rec.refs = 1;
+
+			// NEW: Extract the raw triangles from the Model and build the BVH!
+			rec.bvh.build_from_model(mod);
+
+			s_models[handle] = std::move(rec);
 			s_model_paths[handle] = uri;
 		}
-		// 3. Just increase the reference count!
+		// Just increase the reference count
 		else {
 			it->second.refs += 1;
 		}

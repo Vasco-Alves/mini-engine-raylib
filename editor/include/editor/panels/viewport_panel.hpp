@@ -6,6 +6,8 @@
 #include <mini-engine-raylib/ecs/components.hpp>
 #include "editor/core/icommands.hpp"
 
+namespace me::systems { class RaytracerSystem; }
+
 namespace editor {
 
 	class ViewportPanel {
@@ -21,7 +23,11 @@ namespace editor {
 			me::components::CameraComponent& camera,
 			me::Entity selected_entity,
 			int gizmo_type,
-			editor::CommandHistory& command_history
+			editor::CommandHistory& command_history,
+			Texture2D* raytraced_texture,
+			bool is_render_mode,
+			bool is_play_mode,
+			me::systems::RaytracerSystem* raytracer
 		);
 
 		bool is_focused() const { return m_IsFocused; }

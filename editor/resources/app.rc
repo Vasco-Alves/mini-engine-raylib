@@ -1,0 +1,2 @@
+// Windows executable icon (id 1 is what Explorer shows for the file).
+1 ICON "icon.ico"

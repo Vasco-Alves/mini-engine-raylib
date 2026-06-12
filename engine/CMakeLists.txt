@@ -7,15 +7,16 @@ set(SOURCES
     "src/input/input.cpp"
     "src/input/input_defaults.cpp"
     "src/render/renderer.cpp"
-    "src/render/camera_system.cpp"
+    "src/systems/camera_system.cpp"
     "src/scripting/script_manager.cpp"
     "src/systems/script_system.cpp"
     "src/scene/scene_manager.cpp"
     "src/systems/transform_system.cpp"
     "src/core/vfs.cpp" 
     "src/core/logger.cpp"
-    "src/systems/physics_system.cpp" 
-  "src/systems/audio_system.cpp")
+    "src/systems/physics_system.cpp"
+    "src/ecs/component_registry.cpp"
+  "src/systems/audio_system.cpp" "src/systems/raytracer_system.cpp" "src/render/raytracing_math.cpp")
 
 # 3. Create the Library
 add_library(engine STATIC ${SOURCES})

@@ -11,6 +11,11 @@ namespace me {
 	bool init(const AppConfig& config);
 	void run(Application& app, const AppConfig& config = {});
 
+	// Advances the simulation one frame (scripts -> physics -> transforms), honoring
+	// play/pause/step state. run() already calls this each frame before on_update();
+	// exposed for front-ends that drive their own loop.
+	void world_update(float dt);
+
 	// Global Accessors
 	Registry& get_registry();
 
@@ -19,6 +24,10 @@ namespace me {
 	bool is_playing();
 
 	void close_application();
+
+	// 0 = uncapped. Editors can relax the cap while path tracing (every frame
+	// is a sample) and restore it for normal UI work to spare the GPU.
+	void set_target_fps(int fps);
 
 	int get_window_width();
 	int get_window_height();

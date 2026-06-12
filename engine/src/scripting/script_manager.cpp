@@ -23,7 +23,6 @@ namespace me::scripting {
 		s_State = std::make_unique<sol::state>();
 		s_State->open_libraries(sol::lib::base, sol::lib::math, sol::lib::string);
 
-		// Custom print function to route Lua print() to our Engine Logger!
 		s_State->set_function("print", [](sol::variadic_args va) {
 			std::string output = "";
 			for (auto v : va) {
@@ -129,6 +128,10 @@ namespace me::scripting {
 	}
 
 	sol::state& get_state() {
+		if (!s_State) {
+			me::logger::error("scripting::get_state() called before init() — aborting");
+			std::abort();
+		}
 		return *s_State;
 	}
 

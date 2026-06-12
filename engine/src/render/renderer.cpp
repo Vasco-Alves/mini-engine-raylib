@@ -19,6 +19,13 @@ namespace me::render {
 	static bool s_LightingEnabled = true;
 	static int s_ViewPosLoc;
 
+	// Material Uniforms
+	static int s_UseMaterialLoc;
+	static int s_MatAlbedoLoc;
+	static int s_MatRoughnessLoc;
+	static int s_MatMetallicLoc;
+	static int s_MatEmissionLoc;
+
 	// Point Lights
 #define MAX_LIGHTS 8
 	static int s_LightCountLoc;
@@ -26,7 +33,7 @@ namespace me::render {
 	static int s_LightColorLoc[MAX_LIGHTS];
 	static int s_LightIntensityLoc[MAX_LIGHTS];
 
-	// Directional Light (The Sun)
+	// Directional Light
 	static int s_DirLightDirLoc;
 	static int s_DirLightColorLoc;
 	static int s_DirLightIntensityLoc;
@@ -46,6 +53,13 @@ namespace me::render {
 
 		// 3. Cache Uniforms
 		s_ViewPosLoc = GetShaderLocation(s_LightingShader, "viewPos");
+
+		s_UseMaterialLoc = GetShaderLocation(s_LightingShader, "useMaterial");
+		s_MatAlbedoLoc = GetShaderLocation(s_LightingShader, "matAlbedo");
+		s_MatRoughnessLoc = GetShaderLocation(s_LightingShader, "matRoughness");
+		s_MatMetallicLoc = GetShaderLocation(s_LightingShader, "matMetallic");
+		s_MatEmissionLoc = GetShaderLocation(s_LightingShader, "matEmission");
+
 		s_LightCountLoc = GetShaderLocation(s_LightingShader, "lightCount");
 
 		for (int i = 0; i < MAX_LIGHTS; i++) {
@@ -130,7 +144,7 @@ namespace me::render {
 			}
 			SetShaderValue(s_LightingShader, s_LightCountLoc, &active_lights, SHADER_UNIFORM_INT);
 
-			// --- B. Directional Light (The Sun) ---
+			// --- B. Directional Light ---
 			int has_dir_light = 0;
 			auto& dir_pool = reg.view<me::components::DirectionalLightComponent>();
 			if (dir_pool.size() > 0) {
@@ -141,11 +155,7 @@ namespace me::render {
 
 					float pitch = t->rotation.x * DEG2RAD;
 					float yaw = t->rotation.y * DEG2RAD;
-					Vector3 dir = {
-						std::cos(pitch) * std::sin(yaw),
-						-std::sin(pitch),
-						std::cos(pitch) * std::cos(yaw)
-					};
+					Vector3 dir = { std::cos(pitch) * std::sin(yaw), -std::sin(pitch), std::cos(pitch) * std::cos(yaw) };
 					dir = Vector3Normalize(dir);
 
 					Vector3 col = { dl.color.r / 255.0f, dl.color.g / 255.0f, dl.color.b / 255.0f };
@@ -156,6 +166,24 @@ namespace me::render {
 			}
 			SetShaderValue(s_LightingShader, s_HasDirLightLoc, &has_dir_light, SHADER_UNIFORM_INT);
 		}
+
+		// Helper Lambda to bind the material per-object
+		auto bind_material = [&](me::entity::entity_id e) {
+			if (!s_LightingEnabled) return;
+
+			if (auto* mat = reg.try_get_component<me::components::MaterialComponent>(e)) {
+				int useMat = 1;
+				Vector4 albedo = { mat->albedo.r / 255.0f, mat->albedo.g / 255.0f, mat->albedo.b / 255.0f, mat->albedo.a / 255.0f };
+				SetShaderValue(s_LightingShader, s_UseMaterialLoc, &useMat, SHADER_UNIFORM_INT);
+				SetShaderValue(s_LightingShader, s_MatAlbedoLoc, &albedo, SHADER_UNIFORM_VEC4);
+				SetShaderValue(s_LightingShader, s_MatRoughnessLoc, &mat->roughness, SHADER_UNIFORM_FLOAT);
+				SetShaderValue(s_LightingShader, s_MatMetallicLoc, &mat->metallic, SHADER_UNIFORM_FLOAT);
+				SetShaderValue(s_LightingShader, s_MatEmissionLoc, &mat->emission_power, SHADER_UNIFORM_FLOAT);
+			} else {
+				int useMat = 0;
+				SetShaderValue(s_LightingShader, s_UseMaterialLoc, &useMat, SHADER_UNIFORM_INT);
+			}
+			};
 
 		// ==========================================
 		// 3. RENDER SCENE
@@ -172,6 +200,12 @@ namespace me::render {
 			auto& mesh = meshPool.components[i];
 			auto* t = reg.try_get_component<me::components::TransformComponent>(e);
 			if (!t) continue;
+
+			// Force Raylib to draw waiting geometry before we change shader uniforms
+			rlDrawRenderBatchActive();
+
+			// Send material data to the shader
+			bind_material(e);
 
 			::Color col = to_ray(mesh.color);
 			rlPushMatrix();
@@ -190,6 +224,8 @@ namespace me::render {
 			rlPopMatrix();
 		}
 
+		rlDrawRenderBatchActive();
+
 		// --- DRAW 3D MODELS ---
 		auto& modelPool = reg.view<me::components::Model3DComponent>();
 		Shader active_shader = s_LightingEnabled ? s_LightingShader : s_DefaultShader;
@@ -199,6 +235,8 @@ namespace me::render {
 			auto& modComp = modelPool.components[i];
 			auto* t = reg.try_get_component<me::components::TransformComponent>(e);
 			if (!t) continue;
+
+			bind_material(e);
 
 			const ::Model* const_model = me::assets::internal_get_model(modComp.model);
 			if (const_model) {
@@ -218,79 +256,6 @@ namespace me::render {
 
 		if (s_LightingEnabled) EndShaderMode();
 		EndMode3D();
-	}
-
-	void render_2d() {
-		auto& reg = me::get_registry();
-
-		// 1. Setup the 2D Camera
-		::Camera2D ray_cam2d = { 0 };
-		ray_cam2d.zoom = 1.0f;
-
-		auto& cam2d_pool = reg.view<me::components::Camera2DComponent>();
-		for (size_t i = 0; i < cam2d_pool.size(); ++i) {
-			me::entity::entity_id e = cam2d_pool.entity_map[i];
-			auto& cam = cam2d_pool.components[i];
-
-			if (cam.active) {
-				auto* t = reg.try_get_component<me::components::TransformComponent>(e);
-				if (t) {
-					ray_cam2d.target = { t->position.x, t->position.y };
-					ray_cam2d.offset = { cam.offset.x, cam.offset.y };
-					ray_cam2d.rotation = cam.rotation;
-					ray_cam2d.zoom = cam.zoom;
-					break;
-				}
-			}
-		}
-
-		// 2. Start Drawing 2D World
-		BeginMode2D(ray_cam2d);
-
-		// --- 2D Primitives ---
-		auto& shape2d_pool = reg.view<me::components::Shape2DComponent>();
-		for (size_t i = 0; i < shape2d_pool.size(); ++i) {
-			me::entity::entity_id e = shape2d_pool.entity_map[i];
-			auto& shape = shape2d_pool.components[i];
-
-			auto* t = reg.try_get_component<me::components::TransformComponent>(e);
-			if (!t) continue;
-
-			::Color col = to_ray(shape.color);
-
-			if (shape.type == me::components::Shape2DComponent::Rectangle) {
-				::Rectangle rect = { t->position.x, t->position.y, t->scale.x, t->scale.y };
-				::Vector2 origin = { rect.width / 2.0f, rect.height / 2.0f };
-
-				if (shape.wireframe) DrawRectangleLinesEx(rect, 1.0f, col);
-				else DrawRectanglePro(rect, origin, t->rotation.z, col);
-
-			} else if (shape.type == me::components::Shape2DComponent::Circle) {
-				if (shape.wireframe) DrawCircleLines(t->position.x, t->position.y, t->scale.x, col);
-				else DrawCircle(t->position.x, t->position.y, t->scale.x, col);
-			}
-		}
-
-		// --- Sprites ---
-		auto& sprite_pool = reg.view<me::components::SpriteComponent>();
-		for (size_t i = 0; i < sprite_pool.size(); ++i) {
-			me::entity::entity_id e = sprite_pool.entity_map[i];
-			auto& sprite = sprite_pool.components[i];
-
-			auto* t = reg.try_get_component<me::components::TransformComponent>(e);
-			if (!t) continue;
-
-			const ::Texture2D* tex = me::assets::internal_get_texture(sprite.texture);
-			if (tex) {
-				::Rectangle source = { 0.0f, 0.0f, (float)tex->width, (float)tex->height };
-				::Rectangle dest = { t->position.x, t->position.y, tex->width * t->scale.x, tex->height * t->scale.y };
-				::Vector2 origin = { dest.width / 2.0f, dest.height / 2.0f };
-
-				DrawTexturePro(*tex, source, dest, origin, t->rotation.z, to_ray(sprite.tint));
-			}
-		}
-
-		EndMode2D();
 	}
 
 	bool is_lighting_enabled() { return s_LightingEnabled; }

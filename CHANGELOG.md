@@ -2,7 +2,252 @@
 
 All notable changes to this project will be documented in this file.
 
-# Untitled
+## [1.0.0] - 2026-06-12
+
+The first stable release. The identity is complete and shipping: *build a scene once —
+press Play to run it as a game, or press Render to path-trace it into stills and
+animations.* Both halves produce standalone artifacts (exported games, rendered image
+sequences), the editor is undo-safe end to end, and the whole thing packages into a
+redistributable zip.
+
+### Added
+
+- **Demo project**: new projects are seeded with a showcase scene — glass and mirror
+  spheres, a gold dragon model, an emissive cube, a roughness lineup, and a physics cube
+  with a Lua jump script + sound (press Play, hit SPACE). A sample animation sidecar
+  (camera dolly + emission ramp) is included, ready for Render Animation. `Ctrl+N` still
+  creates a minimal clean scene.
+- **App icon**: the editor and game executables carry the engine icon (play triangle +
+  render orb), and the editor sets it as the window/taskbar icon at runtime.
+- **Help menu**: a Controls cheat-sheet window (every shortcut) and the About dialog.
+- **Cross-platform groundwork**: macOS caps OpenGL at 4.1, so the build now selects the
+  GL version per platform (the GPU path-tracer backend is unavailable on Apple platforms;
+  the raytracer detects this at runtime and the CPU backend keeps working). AVX2 is only
+  requested on x86-64, unblocking ARM builds.
+
+### Changed
+
+- **The editor ships as `MiniEngine.exe`** (the product name) instead of `editor.exe`.
+- A missing game runtime at export now explains the fix for packaged installs, not just
+  source builds.
+
+### Fixed
+
+- **Transform hierarchy cycle guard**: a corrupt or hand-edited scene file containing a
+  parent cycle no longer overflows the stack — the loop is broken with a warning, cycle
+  "islands" still update standalone, and entities whose parent id doesn't resolve are
+  treated as roots instead of freezing forever.
+- **Scene loading resilience**: a malformed component is logged and skipped instead of
+  aborting the whole scene load.
+- **The last non-undoable edits**: hierarchy drag-drop reparenting (including Unparent)
+  and Lua script attach/detach now go through the command history.
+- New headless `animation_eval` test suite pins down keyframe interpolation, easing,
+  clamping and JSON-lerp semantics (registered with CTest).
+
+## [0.17.0] - 2026-06-11
+
+The release-readiness update: the engine's second front-end (the game runtime) ships,
+and the project gains the release hygiene expected of a 1.0 candidate.
+
+### Added
+
+- **Game runtime (`game/`)**: a standalone `me::Application` front-end with no editor and
+  no ImGui. It reads `game_config.json`, mounts the packaged assets, loads the boot scene
+  and runs it in play mode — physics, Lua scripts and 3D audio — rendered from the scene's
+  active `CameraComponent` (with a safe fallback view when a scene has no camera).
+- **File > Export Game…**: packages a standalone game Godot-style — the prebuilt runtime is
+  copied and renamed, engine shaders and the project's assets are copied next to it, and a
+  `game_config.json` records window settings and the boot scene. Native folder picker,
+  boot-scene selector, no compilation at export time.
+- **LICENSE**: the project is now formally MIT licensed.
+- **Versioning**: single-source version constant (`core/version.hpp`), a Help > About
+  dialog in the editor, and this changelog brought back into service.
+- **Scene format version field**: scene files now carry `"version"`, so future format
+  changes can be migrated (or at least warned about) instead of silently misread.
+- **Packaging**: CMake install rules + CPack produce a redistributable zip
+  (editor + game runtime + assets + docs) via `cpack -G ZIP`.
+
+## [0.16.0] - 2026-06-11
+
+The identity update: the engine now states — and shows — what it is: *build a scene once;
+press Play to run it as a game, or press Render to path-trace it into film.*
+
+### Added
+
+- **Per-mode workspaces**: Edit and Render modes each remember their own panel set
+  (View > Panels) and dock layout, swapping automatically on mode change. Render mode
+  drops the content browser/console and brings in the animation timeline and raytracer
+  settings.
+- **Mode visual identity**: color-coded viewport frame (green = playing, purple =
+  rendering), a toolbar mode badge, and the mode in the window title.
+- **Shipped default layouts**: fresh installs start with the layouts under
+  `editor/assets/layouts/` (exported via Layout > Save As Shipped Default), so the first
+  run looks like the author's setup.
+- **Explicit-save layout model**: ImGui's continuous ini autosave is disabled; layouts
+  persist only when saved (Layout > Save Layout), with in-session memory across mode
+  switches and a Reset to Default.
+
+### Changed
+
+- **Asset ownership**: the runtime shaders (lighting + raytracer compute) moved from
+  `editor/assets/` to `engine/assets/` — they were always loaded through the `engine://`
+  mount and belong to the engine, not the editor.
+- The editor's offline-render flows (PNG export + animation render) moved into their own
+  translation unit (`editor_offline_render.cpp`).
+- README/ARCHITECTURE rewritten around the one-scene-many-consumers identity.
+
+## [0.15.0] - 2026-06-11
+
+The animation update: keyframe the camera, the environment and entity components, then
+render the result as an image sequence.
+
+### Added
+
+- **Keyframe animation**: camera track (position, look-at, FOV, exposure, aperture,
+  focus distance), environment track (sky horizon/zenith colors, sky intensity, ambient —
+  sunsets are two keys), and entity tracks that animate whole components (Transform,
+  Material, shapes, lights) through the component registry — captured as JSON snapshots
+  with every numeric field interpolated, zero per-component animation code.
+- **Timeline panel**: a real timeline with a time ruler, scrubbing playhead, draggable
+  keyframe diamonds, per-key easing (linear/smooth), right-click context menus,
+  double-click to jump, Ctrl+scroll zoom with pinned track labels, and direct value
+  editing for camera/environment keys. All keyframe edits are undoable.
+- **Animation preview**: plays in the Edit viewport in real time, and inside the path
+  tracer in Render mode (one progressive sample per frame).
+- **Offline animation render**: renders frame-by-frame at export resolution/samples into
+  `renders/anim_<timestamp>/frame_0001.png …` with per-frame and per-sample progress,
+  cancel support, and the ffmpeg one-liner logged for joining into a video.
+- **Animation persistence**: tracks save to a `<scene>.anim.json` sidecar with the scene;
+  entity tracks re-bind by entity name across scene loads.
+
+## [0.14.0] - 2026-06-10
+
+The editor quality-of-life update: undo for everything, real scene management, and an
+editor that no longer burns the GPU while idle.
+
+### Added
+
+- **Structural undo/redo**: adding/removing components, creating/deleting/duplicating
+  entities — all undoable. Deleting an entity snapshots every component plus hierarchy
+  links; undo restores it and re-claims its children.
+- **Scene management**: File > Open Scene, Save Scene As (Ctrl+Shift+S), an
+  unsaved-changes guard on Exit/New/Open, and a dirty marker (`*`) in the title bar.
+- **Hierarchy polish**: inline rename (F2 / double-click), Duplicate and Rename in the
+  context menu, and an Edit menu with Undo/Redo/Duplicate/Delete.
+- **Inspector precision**: hold Alt for 10x finer drag control on every field; gizmo
+  snapping with Ctrl was joined by camera speed modifiers (Shift = sprint, Ctrl =
+  precision) and scroll-to-tune fly speed with an on-screen toast.
+- **Stats overlay** (View > Stats Overlay): FPS/frame time, entity count, and raytracer
+  resolution/backend/sample progress in Render mode.
+
+### Changed
+
+- **Frame pacing**: the editor was running uncapped; Edit/Play now cap to the monitor
+  refresh rate and Render mode uncaps (every frame is a path-tracer sample).
+- Scene loads route through one guarded path; opening a scene from the content browser
+  previously left Ctrl+S pointed at the *old* scene file (a data-loss bug) and kept a
+  stale undo history that could resurrect entities from the previous scene.
+- Component removal now releases native handles (models/audio) through the component
+  registry, fixing leaks when removing asset-backed components.
+- All non-vendor compiler warnings fixed; builds are warning-clean.
+
+## [0.13.0] - 2026-06-10
+
+The path tracer realism update, plus a hardened offline export pipeline.
+
+### Added
+
+- **Soft shadows**: point lights gained a radius and directional lights an angular size;
+  shadow rays sample the light's disk/cone, so shadows soften with distance.
+- **Physical glass**: Fresnel (Schlick) reflectance at interfaces and Beer–Lambert
+  absorption through the interior — tinted glass darkens with thickness and its cast
+  light takes the glass color. A per-material **Tint Strength** scales the absorption
+  density (0 = always clear). Inverse-square falloff for point lights.
+- **Depth of field**: thin-lens aperture + focus distance with **click-to-focus** in the
+  render view; exposure control; **firefly clamp** to suppress bright noise specks.
+- **Camera component panel** in the inspector, and play mode now renders from the scene's
+  active camera instead of the editor fly-cam.
+- **Export estimates**: the export dialog shows MP/sample, approximate VRAM and workload
+  warnings, recommending a backend when settings are heavy.
+
+### Fixed
+
+- **GPU driver resets on heavy exports (TDR)**: the compute dispatch is now split into
+  row bands sized against the bounce count, so no single dispatch can outlive the OS GPU
+  watchdog. High-resolution GPU exports no longer crash the app.
+- **Analytic cube interior hits**: rays starting inside a cube (refraction) reported no
+  exit hit, so glass cubes never tinted — both backends now fall back to the exit face,
+  matching the sphere's behavior.
+- **Depth-of-field lens sampling** was per-frame instead of per-pixel, making the whole
+  image lurch while accumulating instead of blurring.
+- **Export correctness**: exports previously rendered at viewport resolution regardless of
+  the dialog settings (the viewport size tracker fought the export resize), and the
+  viewport pass kept rendering during exports. Offline renders now own the raytracer,
+  pause the viewport, restore every overridden setting, and support cancel.
+
+## [0.12.0] - 2026-06-09
+
+The architecture update: one registration per component now drives everything, and the
+GPU path tracer becomes the default backend.
+
+### Added
+
+- **Component registry** (`me::ecs`): a single per-component registration providing
+  has/save/load/clone/remove/on-destroy operations. Scene serialization, entity
+  duplication, native-handle cleanup — and later undo and animation — all derive from it.
+- **GPU compute path tracer** as the default backend, mirroring the CPU feature set
+  (BVH/BLAS traversal, NEE direct lighting, progressive accumulation, ACES, Halton AA),
+  with shared scene flattening into SSBOs.
+- **Headless tests**: a scene save→load→save round-trip test (CTest) and a compute-shader
+  compile check used to validate GLSL changes without driving the editor.
+
+### Changed
+
+- Scene save/load rewritten on top of the registry with a three-pass load (create + id
+  map, load components, relink hierarchy).
+- One canonical per-frame order (`world_update`): scripts → physics → transforms,
+  removing a one-frame physics lag.
+- The inspector was rebuilt around a component table (single source of truth for panels
+  and the Add Component menu) with RAII section headers fixing a latent ImGui tree-stack
+  imbalance.
+- OpenGL 4.3 is requested through raylib's own configuration knob instead of a leaky
+  global define.
+
+### Removed
+
+- The dormant 2D component scaffolding (Shape2D/Camera2D/Sprite) — the engine is
+  3D-focused; 2D can return as ordinary registry entries when wanted.
+
+### Fixed
+
+- `me::audio::update()` was never pumped, so streamed music stalled after a few seconds.
+- Entity duplication and deletion now go through the registry (duplicating an entity
+  previously aliased the source's children list; deletion leaked native handles).
+
+## [0.11.1] - 2026-06-08
+
+### Added:
+
+- **Glass & Refraction**: Introduced `transmission` and `ior` (Index of Refraction) to `MaterialComponent`, allowing for realistic rendering of transparent materials like glass, water, and diamonds.
+- **Physical Light Support**: Upgraded Point and Directional light intensity calculations to work in Linear Space (sRGB-to-Linear conversion), resulting in more vibrant and physically accurate lighting.
+- **ACES Filmic Tonemapping**: Implemented ACES curve for HDR-to-LDR mapping, fixing blown-out highlights and color desaturation ("washed-out" look).
+- **QMC Anti-Aliasing**: Integrated Halton sequence for camera ray jittering, significantly improving edge quality and pixel distribution.
+- **Fast RNG**: Replaced standard library random with a high-performance PCG hash for bounce rays, significantly reducing noise and improving performance.
+
+### Changed:
+
+- **BLAS Acceleration**: Upgraded `TriangleBVH` from a brute-force list to a structured BVH tree, enabling real-time raytracing for high-poly 3D models.
+- **Raytracer Pipeline**: Refactored the raytracing pipeline to use physically-based material properties (Linear space conversion) and refined the integration logic to prevent double-gamma errors.
+- **Renderer Stability**: Fixed a bug where primitive shapes in the OpenGL editor would inherit material uniforms from subsequently drawn 3D models.
+
+## [0.11.0] - 2026-05-08
+
+### Added:
+
+- **Raytracing System**: Initial implementation of the CPU-based path tracer.
+- **Render Mode**: Introduced a "RENDER" button to toggle between the rasterized editor view and the path-traced viewport.
+- **BVH System**: Built a Two-Level Acceleration Structure (TLAS/BLAS) to support real-time raytracing of primitives (`Sphere`, `Plane`, `Cube`) and custom 3D models (`Model3DComponent`).
+- **Export**: Added functionality to export the accumulated raytraced result to a high-quality PNG file.
 
 ## [0.10.0] - 2026-05-24
 

@@ -8,10 +8,12 @@
 #include "mini-engine-raylib/scripting/script_manager.hpp" 
 #include "mini-engine-raylib/systems/script_system.hpp"
 #include "mini-engine-raylib/systems/transform_system.hpp"
+#include "mini-engine-raylib/systems/physics_system.hpp"
 #include <mini-ecs/registry.hpp>
 
 #include "mini-engine-raylib/ecs/components.hpp"
 #include "mini-engine-raylib/ecs/audio_components.hpp"
+#include "mini-engine-raylib/ecs/component_registry.hpp"
 
 namespace me {
 
@@ -29,7 +31,9 @@ namespace me {
 	bool init(const AppConfig& config) {
 		s_State.config = config;
 
-		if (config.vsync) SetConfigFlags(FLAG_VSYNC_HINT);
+		if (config.vsync)
+			SetConfigFlags(FLAG_VSYNC_HINT);
+
 		SetConfigFlags(FLAG_WINDOW_RESIZABLE);
 
 		InitWindow(config.width, config.height, config.title.c_str());
@@ -49,6 +53,29 @@ namespace me {
 
 		s_State.running = true;
 		return true;
+	}
+
+	void world_update(float dt) {
+		// Canonical per-frame simulation order, shared by every front-end:
+		//   1. scripts  — game logic sets velocities and spawns entities
+		//   2. physics  — integrates those velocities, writes back positions
+		//   3. transforms — rebuild world matrices from the post-physics positions
+		// Doing physics before the transform pass means the same frame renders the new
+		// state (no one-frame lag). Scripts + physics are gated by play/pause/step;
+		// transforms always run so edit-mode gizmo/inspector edits still rebuild.
+		if (s_State.is_playing) {
+			if (!s_State.is_paused) {
+				me::systems::script_update(dt);
+				me::physics::update(*s_State.registry, dt);
+			} else if (s_State.step_frames > 0) {
+				const float fixed_dt = 1.0f / 60.0f;
+				me::systems::script_update(fixed_dt);
+				me::physics::update(*s_State.registry, fixed_dt);
+				s_State.step_frames--;
+			}
+		}
+
+		me::systems::transform_update();
 	}
 
 	void run(Application& app, const AppConfig& config) {
@@ -75,19 +102,15 @@ namespace me {
 			float dt = GetFrameTime();
 			me::input::poll();
 
-			if (s_State.is_playing) {
-				if (!s_State.is_paused) {
-					me::systems::script_update(dt);
-				} else if (s_State.step_frames > 0) {
-					float fixed_dt = 1.0f / 60.0f;
-					me::systems::script_update(fixed_dt);
-					s_State.step_frames--;
-				}
-			}
-
-			me::systems::transform_update();
+			// Advance the world (scripts -> physics -> transforms) in one shared order.
+			world_update(dt);
 
 			app.on_update(dt);
+
+			// Pump streamed music buffers each frame (one-shot sounds don't need this).
+			// Runs regardless of play state so the inspector's BGM Play/Pause controls
+			// work while editing, not just in play mode.
+			me::audio::update();
 
 			BeginDrawing();
 			ClearBackground({ 0, 0, 0, 0 });
@@ -98,16 +121,8 @@ namespace me {
 			// 4. PROCESS ECS DEFERRED DELETIONS
 			// ==========================================
 			s_State.registry->process_deletions([&](me::entity::entity_id e) {
-				// Safely release native hardware handles before the entity is destroyed
-				if (auto* audio = s_State.registry->try_get_component<me::components::AudioSourceComponent>(e)) {
-					if (audio->clip.handle != 0) me::audio::release(audio->clip);
-				}
-				if (auto* bgm = s_State.registry->try_get_component<me::components::BackgroundMusicComponent>(e)) {
-					if (bgm->stream.handle != 0) me::audio::release(bgm->stream);
-				}
-				if (auto* model = s_State.registry->try_get_component<me::components::Model3DComponent>(e)) {
-					if (model->model.handle != 0) me::assets::release(model->model);
-				}
+				// Release native (GPU/audio) handles before the entity row is destroyed.
+				me::ecs::release_native_handles(*s_State.registry, e);
 				});
 		}
 
@@ -125,6 +140,7 @@ namespace me {
 	void set_playing(bool playing) { s_State.is_playing = playing; }
 	bool is_playing() { return s_State.is_playing; }
 	void close_application() { s_State.running = false; }
+	void set_target_fps(int fps) { SetTargetFPS(fps); }
 	int get_window_width() { return GetScreenWidth(); }
 	int get_window_height() { return GetScreenHeight(); }
 	void set_paused(bool paused) { s_State.is_paused = paused; }

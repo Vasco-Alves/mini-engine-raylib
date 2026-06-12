@@ -36,10 +36,19 @@ namespace me {
 			SceneLoadedEvent(const std::string& path) : filepath(path) {}
 		};
 
+		// A request to open a scene (e.g. double-click in a file browser).
+		// The front-end decides when to honor it — it may first prompt about
+		// unsaved changes — and then performs the actual load.
+		class SceneOpenRequestEvent : public Event {
+		public:
+			std::string filepath;
+			SceneOpenRequestEvent(const std::string& path) : filepath(path) {}
+		};
+
 		// Editor UI Events
 		class EntitySelectedEvent : public Event {
 		public:
-			uint32_t entity_id; // 0xFFFFFFFF means deselect
+			uint32_t entity_id; // me::entity::null (0) means deselect
 			EntitySelectedEvent(uint32_t id) : entity_id(id) {}
 		};
 
