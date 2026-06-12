@@ -361,3 +361,11 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# ==========================================
+# Mini Engine: re-include project assets that collide with the build-output
+# patterns above. Wavefront 3D models use the .obj extension, which the
+# Visual Studio template ignores (there it means MSVC object files).
+# Files inside ignored directories (out/, bin/) are unaffected — git never
+# descends into them — so build copies of assets stay ignored.
+# ==========================================
+!**/assets/**/*.obj
