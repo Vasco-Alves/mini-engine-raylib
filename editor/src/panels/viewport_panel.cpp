@@ -45,7 +45,9 @@ namespace editor {
 		// ==========================================
 		// RENDER OUTPUT TOGGLE
 		// ==========================================
-		if (is_render_mode && raytraced_texture && raytraced_texture->id != 0) {
+		// The caller passes the raytraced texture only when it should replace the
+		// raster view (Render mode, or Play mode with the RT toggle on).
+		if (raytraced_texture && raytraced_texture->id != 0) {
 			// Draw the Raytracer texture, stretched to perfectly fit the viewport bounds
 			rlImGuiImageSize(raytraced_texture, (int)m_Bounds.x, (int)m_Bounds.y);
 		} else {
@@ -210,7 +212,8 @@ namespace editor {
 						bool is_clickable = reg.try_get_component<me::components::Shape3DComponent>(e) ||
 							reg.try_get_component<me::components::Model3DComponent>(e) ||
 							reg.try_get_component<me::components::LightComponent>(e) ||
-							reg.try_get_component<me::components::DirectionalLightComponent>(e);
+							reg.try_get_component<me::components::DirectionalLightComponent>(e) ||
+							reg.try_get_component<me::components::CameraComponent>(e);
 
 						if (t && is_clickable) {
 							Vector3 world_pos = { t->model_matrix.m12, t->model_matrix.m13, t->model_matrix.m14 };

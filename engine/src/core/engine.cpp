@@ -5,10 +5,11 @@
 #include "mini-engine-raylib/input/input_defaults.hpp"
 #include "mini-engine-raylib/audio/audio.hpp" 
 #include "mini-engine-raylib/assets/assets.hpp"
-#include "mini-engine-raylib/scripting/script_manager.hpp" 
+#include "mini-engine-raylib/scripting/script_manager.hpp"
 #include "mini-engine-raylib/systems/script_system.hpp"
 #include "mini-engine-raylib/systems/transform_system.hpp"
 #include "mini-engine-raylib/systems/physics_system.hpp"
+#include "mini-engine-raylib/scene/scene_manager.hpp"
 #include <mini-ecs/registry.hpp>
 
 #include "mini-engine-raylib/ecs/components.hpp"
@@ -59,7 +60,8 @@ namespace me {
 		// Canonical per-frame simulation order, shared by every front-end:
 		//   1. scripts  — game logic sets velocities and spawns entities
 		//   2. physics  — integrates those velocities, writes back positions
-		//   3. transforms — rebuild world matrices from the post-physics positions
+		//   3. collision callbacks — on_collision_enter/exit from the step just taken
+		//   4. transforms — rebuild world matrices from the post-physics positions
 		// Doing physics before the transform pass means the same frame renders the new
 		// state (no one-frame lag). Scripts + physics are gated by play/pause/step;
 		// transforms always run so edit-mode gizmo/inspector edits still rebuild.
@@ -67,10 +69,12 @@ namespace me {
 			if (!s_State.is_paused) {
 				me::systems::script_update(dt);
 				me::physics::update(*s_State.registry, dt);
+				me::systems::script_dispatch_collisions();
 			} else if (s_State.step_frames > 0) {
 				const float fixed_dt = 1.0f / 60.0f;
 				me::systems::script_update(fixed_dt);
 				me::physics::update(*s_State.registry, fixed_dt);
+				me::systems::script_dispatch_collisions();
 				s_State.step_frames--;
 			}
 		}
@@ -124,6 +128,19 @@ namespace me {
 				// Release native (GPU/audio) handles before the entity row is destroyed.
 				me::ecs::release_native_handles(*s_State.registry, e);
 				});
+
+			// ==========================================
+			// 5. APPLY A DEFERRED SCENE SWITCH (Lua's Scene.load)
+			// ==========================================
+			// Applied here — after deletions, before the next frame — so no system is
+			// mid-iteration over the registry when every entity is replaced. While the
+			// simulation is live the physics world is rebuilt around the new scene;
+			// the new scene's scripts run their start() on the next frame.
+			if (me::scene_manager::has_pending_load()) {
+				if (s_State.is_playing) me::physics::on_stop();
+				me::scene_manager::apply_pending_load();
+				if (s_State.is_playing) me::physics::on_play(*s_State.registry);
+			}
 		}
 
 		app.on_shutdown();

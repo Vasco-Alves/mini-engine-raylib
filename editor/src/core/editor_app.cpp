@@ -111,6 +111,11 @@ namespace editor {
 			// history (and the selection) can't survive the swap.
 			m_CommandHistory.Clear();
 			m_HierarchyPanel.set_selected_entity(me::entity::null);
+			// A load during play is a runtime transition (Lua's Scene.load), not
+			// an editing operation: leave the current-scene path, the dirty flag
+			// and the animation sidecar alone — otherwise Ctrl+S after stopping
+			// would write the restored edit scene over the script-loaded file.
+			if (me::is_playing()) return;
 			if (e->filepath.find(".temp_play.json") == std::string::npos) {
 				m_CurrentScenePath = e->filepath;
 				m_SceneDirty = false; // freshly loaded == on-disk state
@@ -131,6 +136,13 @@ namespace editor {
 
 		bus.subscribe<me::events::PlayStateChangedEvent>([](auto* e) {});
 		bus.subscribe<me::events::PauseStateChangedEvent>([](auto* e) {});
+
+		// Lua's Engine.quit(): in the editor that means "leave play mode" — but it
+		// fires mid-script-update, and stopping reloads the scene (destroying the
+		// script pool being iterated). Park it; on_update honors it after the frame.
+		bus.subscribe<me::events::QuitRequestedEvent>([this](auto*) {
+			if (me::is_playing()) m_QuitToEditorRequested = true;
+			});
 	}
 
 	void EditorApp::on_resize(int width, int height) {}
@@ -141,6 +153,13 @@ namespace editor {
 		}
 
 		if (!m_IsProjectLoaded) return;
+
+		// A script's Engine.quit() arrived during world_update; stop play now,
+		// at a safe point outside the script iteration.
+		if (m_QuitToEditorRequested) {
+			m_QuitToEditorRequested = false;
+			if (m_SceneState == SceneState::Play) on_stop();
+		}
 
 		if (m_FlySpeedToastTimer > 0.0f) m_FlySpeedToastTimer -= dt;
 
@@ -205,6 +224,24 @@ namespace editor {
 			m_Raytracer.on_update(me::get_registry(), m_EditorCamera, m_EditorCameraTransform);
 		}
 
+		// RT Play mode: one burst of path-traced samples per frame, rendered from
+		// the scene's active camera (the same view the raster play pass would use).
+		if (m_SceneState == SceneState::Play && m_RaytracePlayMode && !m_IsExporting) {
+			auto& reg = me::get_registry();
+			const me::components::TransformComponent* view_t = &m_EditorCameraTransform;
+			const me::components::CameraComponent* view_c = &m_EditorCamera;
+			auto& cam_pool = reg.view<me::components::CameraComponent>();
+			for (size_t i = 0; i < cam_pool.size(); ++i) {
+				if (!cam_pool.components[i].active) continue;
+				if (auto* t = reg.try_get_component<me::components::TransformComponent>(cam_pool.entity_map[i])) {
+					view_t = t;
+					view_c = &cam_pool.components[i];
+					break;
+				}
+			}
+			m_Raytracer.render_realtime_frame(reg, *view_c, *view_t);
+		}
+
 		poll_shortcuts();
 		update_window_title();
 
@@ -226,9 +263,6 @@ namespace editor {
 			return;
 		}
 
-		// 1. Render the 3D World to the Viewport Texture
-		m_ViewportPanel.begin_render();
-
 		// Choose the viewport camera: the editor fly-cam while editing; the active
 		// scene CameraComponent while playing (falling back to the editor cam if the
 		// scene has none, so the view never goes black).
@@ -246,6 +280,15 @@ namespace editor {
 				}
 			}
 		}
+
+		// 1. Shadow pass — binds its own depth framebuffer, so it must run BEFORE
+		// the viewport texture is bound. Skipped in Render mode (the path tracer
+		// owns the view and computes its own shadows).
+		if (m_SceneState != SceneState::Render)
+			me::render::render_shadows({ view_t->position.x, view_t->position.y, view_t->position.z });
+
+		// 2. Render the 3D World to the Viewport Texture
+		m_ViewportPanel.begin_render();
 
 		me::render::clear_world(me::Color{ 30, 30, 30, 255 });
 		me::render::render_world(view_t, view_c);
@@ -308,6 +351,61 @@ namespace editor {
 					// Draw a tiny solid sphere at the end to act as an arrowhead
 					DrawSphere(endPos, 0.15f, c);
 				}
+			}
+
+			// 3. Camera Gizmos (a wireframe body + the view frustum toward the target)
+			auto& cam_pool = reg.view<me::components::CameraComponent>();
+			for (size_t i = 0; i < cam_pool.size(); ++i) {
+				me::entity::entity_id e = cam_pool.entity_map[i];
+				auto* t = reg.try_get_component<me::components::TransformComponent>(e);
+				if (!t) continue;
+				auto& cam = cam_pool.components[i];
+
+				// The active (rendering) camera draws warm yellow; inactive ones gray.
+				::Color c = cam.active ? ::Color{ 245, 200, 70, 255 } : ::Color{ 150, 150, 150, 255 };
+				Vector3 pos = { t->position.x, t->position.y, t->position.z };
+
+				// Camera body
+				DrawCubeWires(pos, 0.45f, 0.35f, 0.6f, c);
+
+				// View basis from the look-at target (what the camera actually renders).
+				Vector3 fwd = Vector3Subtract({ cam.target.x, cam.target.y, cam.target.z }, pos);
+				if (Vector3LengthSqr(fwd) < 1e-6f) fwd = { 0.0f, 0.0f, 1.0f };
+				fwd = Vector3Normalize(fwd);
+				Vector3 up_ref = Vector3Normalize({ cam.up.x, cam.up.y, cam.up.z });
+				Vector3 right = Vector3CrossProduct(fwd, up_ref);
+				if (Vector3LengthSqr(right) < 1e-6f) right = { 1.0f, 0.0f, 0.0f };
+				right = Vector3Normalize(right);
+				Vector3 up = Vector3Normalize(Vector3CrossProduct(right, fwd));
+
+				// A short frustum pyramid sized by the camera's FOV (16:9 face).
+				const float depth = 1.4f;
+				float half_h = std::tan(cam.fov * 0.5f * DEG2RAD) * depth;
+				float half_w = half_h * (16.0f / 9.0f);
+
+				Vector3 center = { pos.x + fwd.x * depth, pos.y + fwd.y * depth, pos.z + fwd.z * depth };
+				Vector3 corners[4];
+				for (int k = 0; k < 4; ++k) {
+					float sx = (k == 0 || k == 3) ? -1.0f : 1.0f;
+					float sy = (k < 2) ? 1.0f : -1.0f;
+					corners[k] = {
+						center.x + right.x * half_w * sx + up.x * half_h * sy,
+						center.y + right.y * half_w * sx + up.y * half_h * sy,
+						center.z + right.z * half_w * sx + up.z * half_h * sy
+					};
+				}
+				for (int k = 0; k < 4; ++k) {
+					DrawLine3D(pos, corners[k], c);
+					DrawLine3D(corners[k], corners[(k + 1) % 4], c);
+				}
+
+				// A small "up" tick on the top edge so orientation reads at a glance.
+				Vector3 top_mid = {
+					(corners[0].x + corners[1].x) * 0.5f,
+					(corners[0].y + corners[1].y) * 0.5f,
+					(corners[0].z + corners[1].z) * 0.5f
+				};
+				DrawLine3D(top_mid, { top_mid.x + up.x * 0.25f, top_mid.y + up.y * 0.25f, top_mid.z + up.z * 0.25f }, c);
 			}
 		}
 
@@ -381,6 +479,9 @@ namespace editor {
 
 		int active_gizmo = (m_SceneState == SceneState::Edit) ? m_GizmoType : -1;
 		bool is_rendering = (m_SceneState == SceneState::Render);
+		// The raytracer's output replaces the raster view in Render mode and in
+		// RT Play; passing nullptr shows the regular viewport texture.
+		bool show_rt_view = is_rendering || (m_SceneState == SceneState::Play && m_RaytracePlayMode);
 
 		m_ViewportPanel.on_imgui_render(
 			m_EditorCameraTransform,
@@ -388,7 +489,7 @@ namespace editor {
 			selected_entity,
 			active_gizmo,
 			m_CommandHistory,
-			m_Raytracer.get_texture(),            // Pass the texture pointer
+			show_rt_view ? m_Raytracer.get_texture() : nullptr,
 			is_rendering,                         // Pass the state boolean
 			m_SceneState == SceneState::Play,     // For the mode-colored frame
 			&m_Raytracer                          // For click-to-focus (DoF)
@@ -397,12 +498,13 @@ namespace editor {
 		// ==========================================
 		// RAYTRACER SETTINGS WINDOW
 		// ==========================================
-		// Keep the raytracer sized to the viewport in Render mode — independent of
-		// whether the settings window itself is visible. Skipped while exporting:
-		// the offline render owns the resolution then, and this tracker would
-		// stomp it back to viewport size (resetting accumulation and silently
-		// exporting at viewport resolution).
-		if (m_SceneState == SceneState::Render && !m_IsExporting) {
+		// Keep the raytracer sized to the viewport in Render mode (and RT Play) —
+		// independent of whether the settings window itself is visible. Skipped
+		// while exporting: the offline render owns the resolution then, and this
+		// tracker would stomp it back to viewport size (resetting accumulation
+		// and silently exporting at viewport resolution).
+		const bool rt_play_active = (m_SceneState == SceneState::Play && m_RaytracePlayMode);
+		if ((m_SceneState == SceneState::Render || rt_play_active) && !m_IsExporting) {
 			int new_w = (int)(m_ViewportPanel.get_bounds().x * m_Raytracer.resolution_scale);
 			int new_h = (int)(m_ViewportPanel.get_bounds().y * m_Raytracer.resolution_scale);
 			if (new_w < 1) new_w = 1;
@@ -412,8 +514,21 @@ namespace editor {
 			}
 		}
 
-		if (m_SceneState == SceneState::Render && panels.raytracer_settings) {
+		if ((m_SceneState == SceneState::Render || rt_play_active) && panels.raytracer_settings) {
 			ImGui::Begin("Raytracer Settings");
+
+			// --- RT PLAY (real-time) controls — shown while path-tracing play mode ---
+			if (rt_play_active) {
+				ImGui::TextDisabled("RT Play (real-time)");
+				ImGui::SliderInt("Samples / Frame", &m_Raytracer.play_samples_per_frame, 1, 64);
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("Paths traced per pixel each frame. Noise falls with the square root;\nlower the Resolution Scale to afford more.");
+				ImGui::Checkbox("Lock Noise Pattern", &m_Raytracer.lock_noise_pattern);
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("Reuse the same sample seeds every frame: residual noise becomes a\nstable dither pattern instead of animated static.");
+				ImGui::Separator();
+				ImGui::Dummy(ImVec2(0, 5));
+			}
 
 			// --- BACKEND TOGGLE ---
 			const char* backend_names[] = { "CPU PathTracer", "GPU Compute Shader" };
@@ -451,6 +566,39 @@ namespace editor {
 			if (ImGui::SliderInt("Max Bounces", &m_Raytracer.max_bounces, 1, 16)) {
 				m_Raytracer.reset_accumulation();
 			}
+
+			// --- RENDER FEATURES (toggles + presets) — applies to CPU and GPU ---
+			ImGui::Dummy(ImVec2(0, 6));
+			ImGui::Separator();
+			ImGui::TextDisabled("Render Features");
+
+			// Presets are shortcuts for the four toggles below. Noise comes from
+			// random sampling, so the lighter presets are both sharper and faster.
+			using Preset = me::systems::RenderQualityPreset;
+			if (ImGui::SmallButton("Full")) { m_Raytracer.apply_quality_preset(Preset::Full); m_Raytracer.reset_accumulation(); }
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Everything on: GI, soft shadows, reflections, glass.\nReference quality - needs accumulation to converge.");
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Lite")) { m_Raytracer.apply_quality_preset(Preset::Lite); m_Raytracer.reset_accumulation(); }
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("No GI, hard shadows; keeps mirrors + sharp glass.\nNoise-free at 1 sample, still looks ray-traced.");
+			ImGui::SameLine();
+			if (ImGui::SmallButton("Flat")) { m_Raytracer.apply_quality_preset(Preset::Flat); m_Raytracer.reset_accumulation(); }
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Direct light + hard shadows only. Fastest, flattest, zero noise.\nBest for a simple game that just wants crisp lit shapes.");
+
+			bool feat_changed = false;
+			feat_changed |= ImGui::Checkbox("Indirect Lighting (GI)", &m_Raytracer.enable_indirect);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Bounced/global illumination. The biggest source of both realism\nAND noise - turning it off gives a sharp image at 1 sample.");
+			feat_changed |= ImGui::Checkbox("Soft Shadows", &m_Raytracer.enable_soft_shadows);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Penumbras from light size. Off = hard, crisp, noise-free shadows.");
+			feat_changed |= ImGui::Checkbox("Reflections", &m_Raytracer.enable_reflections);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("Specular bounces on opaque surfaces (mirrors).\nMirror reflections are deterministic - sharp, no noise.");
+			feat_changed |= ImGui::Checkbox("Refraction (Glass)", &m_Raytracer.enable_refraction);
+			if (ImGui::IsItemHovered()) ImGui::SetTooltip("See-through glass. Off = glass renders as a solid matte object.");
+			if (feat_changed) m_Raytracer.reset_accumulation();
+
+			// A live hint about whether the current combo converges instantly.
+			bool noise_free = !m_Raytracer.enable_indirect && !m_Raytracer.enable_soft_shadows && m_Raytracer.aperture <= 0.0f;
+			if (noise_free) ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.5f, 1.0f), "Noise-free (sharp at 1 sample)");
+			else ImGui::TextDisabled("Needs accumulation to denoise");
 
 			// --- ENVIRONMENT (sky + ambient) — applies to CPU and GPU backends ---
 			ImGui::Dummy(ImVec2(0, 6));
@@ -913,6 +1061,17 @@ namespace editor {
 		// Start the physics simulation and load the bodies
 		me::physics::on_play(me::get_registry());
 
+		// RT Play: bring the path tracer up at the viewport resolution (scaled),
+		// exactly like entering Render mode does.
+		if (m_RaytracePlayMode) {
+			float raw_w = m_ViewportPanel.get_bounds().x;
+			float raw_h = m_ViewportPanel.get_bounds().y;
+			if (raw_w <= 0 || raw_h <= 0) { raw_w = 1280.0f; raw_h = 720.0f; }
+			int w = std::max(1, (int)(raw_w * m_Raytracer.resolution_scale));
+			int h = std::max(1, (int)(raw_h * m_Raytracer.resolution_scale));
+			m_Raytracer.on_start(w, h);
+		}
+
 		me::set_playing(true);
 		me::get_event_bus().publish<me::events::PlayStateChangedEvent>(true);
 	}
@@ -928,6 +1087,9 @@ namespace editor {
 
 		// Destroy all live physics bodies
 		me::physics::on_stop();
+
+		// RT Play owned the raytracer for the session — free the VRAM/buffers.
+		if (m_RaytracePlayMode) m_Raytracer.on_stop();
 
 		// ==========================================
 		// SILENCE ALL ACTIVE AUDIO
@@ -976,6 +1138,20 @@ namespace editor {
 			return;
 		}
 
+		// A raytraced export needs a runtime that knows the renderer exists. The
+		// runtime embeds a capability marker string; a game.exe from an older
+		// build lacks it and would silently render raster — refuse instead.
+		if (m_ExportGameRaytraced) {
+			std::ifstream rt_check(runtime, std::ios::binary);
+			std::string runtime_bytes((std::istreambuf_iterator<char>(rt_check)), std::istreambuf_iterator<char>());
+			if (runtime_bytes.find("me-runtime-cap:raytraced;") == std::string::npos) {
+				me::logger::error("Export aborted: the game runtime next to the editor is from an older build "
+					"without the raytraced renderer - the exported game would silently fall back to raster.");
+				me::logger::error("Rebuild the 'game' target with the same build as the editor, then export again. (" + runtime.string() + ")");
+				return;
+			}
+		}
+
 		std::string name = m_ExportGameName[0] ? std::string(m_ExportGameName) : "game";
 		fs::path out = m_ExportGameDir;
 		fs::create_directories(out, ec);
@@ -1020,6 +1196,27 @@ namespace editor {
 		j["width"] = std::max(320, m_ExportGameW);
 		j["height"] = std::max(240, m_ExportGameH);
 		j["vsync"] = m_ExportGameVsync;
+		j["renderer"] = m_ExportGameRaytraced ? "raytraced" : "raster";
+		if (m_ExportGameRaytraced) {
+			// Snapshot of the Raytracer Settings the game will boot with.
+			nlohmann::json rt;
+			rt["resolution_scale"] = m_Raytracer.resolution_scale;
+			rt["samples_per_frame"] = m_Raytracer.play_samples_per_frame;
+			rt["bounces"] = m_Raytracer.max_bounces;
+			rt["lock_noise_pattern"] = m_Raytracer.lock_noise_pattern;
+			rt["exposure"] = m_Raytracer.exposure;
+			rt["firefly_clamp"] = m_Raytracer.firefly_clamp;
+			rt["ambient_strength"] = m_Raytracer.ambient_strength;
+			rt["sky_horizon"] = { m_Raytracer.sky_horizon_color.x, m_Raytracer.sky_horizon_color.y, m_Raytracer.sky_horizon_color.z };
+			rt["sky_zenith"] = { m_Raytracer.sky_zenith_color.x, m_Raytracer.sky_zenith_color.y, m_Raytracer.sky_zenith_color.z };
+			rt["sky_intensity"] = m_Raytracer.sky_intensity;
+			// Feature toggles — the game ships with exactly the look you set here.
+			rt["soft_shadows"] = m_Raytracer.enable_soft_shadows;
+			rt["reflections"] = m_Raytracer.enable_reflections;
+			rt["refraction"] = m_Raytracer.enable_refraction;
+			rt["indirect"] = m_Raytracer.enable_indirect;
+			j["rt"] = rt;
+		}
 		std::ofstream ofs(out / "game_config.json");
 		if (ofs) ofs << j.dump(4);
 
@@ -1336,6 +1533,12 @@ namespace editor {
 			}
 			ImGui::PopStyleColor();
 
+			// Path-traced play: the next PLAY renders through the raytracer.
+			ImGui::SameLine(0, 10);
+			ImGui::Checkbox("RT", &m_RaytracePlayMode);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Path trace Play mode (real-time, retro resolutions).\nUses the Raytracer Settings' resolution scale; tune samples/frame\nin the Raytracer Settings panel while playing.");
+
 		} else if (m_SceneState == SceneState::Play) {
 
 			// Layout: [ STOP ] [ PAUSE/RESUME ] [ STEP ]
@@ -1526,6 +1729,19 @@ namespace editor {
 			ImGui::InputInt("Window Width", &m_ExportGameW);
 			ImGui::InputInt("Window Height", &m_ExportGameH);
 			ImGui::Checkbox("VSync", &m_ExportGameVsync);
+
+			ImGui::Dummy(ImVec2(0, 6));
+			ImGui::Checkbox("Raytraced renderer", &m_ExportGameRaytraced);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("The game renders through the real-time path tracer instead of the\nrasterizer — meant for retro/pixelated games (low internal resolution\nbuys the samples). Needs a GPU with compute shaders (OpenGL 4.3);\nfalls back to the (slow) CPU tracer without one.\n\nResolution scale, samples/frame, bounces, sky and exposure are\ncaptured from the current Raytracer Settings at export time.");
+			if (m_ExportGameRaytraced) {
+				ImGui::TextDisabled("internal resolution: %d x %d  (scale %.2f)",
+					std::max(1, (int)(m_ExportGameW * m_Raytracer.resolution_scale)),
+					std::max(1, (int)(m_ExportGameH * m_Raytracer.resolution_scale)),
+					m_Raytracer.resolution_scale);
+				ImGui::TextDisabled("%d samples/frame, %d bounces",
+					m_Raytracer.play_samples_per_frame, m_Raytracer.max_bounces);
+			}
 
 			ImGui::Dummy(ImVec2(0, 10));
 			if (ImGui::Button("Export", ImVec2(120, 0))) {

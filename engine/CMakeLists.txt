@@ -21,6 +21,11 @@ set(SOURCES
 # 3. Create the Library
 add_library(engine STATIC ${SOURCES})
 
+# sol2's template instantiations overflow MSVC's default COFF section limit.
+if(MSVC)
+    set_source_files_properties("src/scripting/script_manager.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj")
+endif()
+
 # 4. Setup Include Directories
 target_include_directories(engine PUBLIC 
     "include" 

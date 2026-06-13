@@ -74,6 +74,13 @@ uniform float exposure;       // tonemap brightness
 uniform float aperture;       // lens radius for depth of field (0 = pinhole)
 uniform float focus_distance; // distance to the focal plane
 uniform float firefly_clamp;  // cap per-sample brightness (0 = off)
+
+// Feature toggles (must match the CPU integrator). Each off removes work and,
+// for the stochastic ones, removes a noise source.
+uniform int soft_shadows;        // 1 = sample the light area (soft), 0 = hard shadows
+uniform int enable_reflections;  // opaque specular (mirror) bounce
+uniform int enable_refraction;   // glass transmission (0 = glass renders matte solid)
+uniform int enable_indirect;     // diffuse GI bounce
 uniform int   row_offset;     // first image row of this dispatch — the host splits
                               // big frames into row bands so no single dispatch can
                               // outlive the OS GPU watchdog (TDR) at export sizes
@@ -352,12 +359,17 @@ vec3 compute_direct(vec3 shadow_origin, vec3 normal, inout uint seed) {
         if (center_dist < 1e-4) continue;
         vec3  ldir_c = to_l / center_dist;
 
-        vec3 a = abs(ldir_c.x) > 0.9 ? vec3(0,1,0) : vec3(1,0,0);
-        vec3 u = normalize(cross(ldir_c, a));
-        vec3 v = cross(ldir_c, u);
-        float rr  = l.radius * sqrt(random_float(seed));
-        float phi = 2.0 * PI * random_float(seed);
-        vec3 sample_pos = l.position + (u * cos(phi) + v * sin(phi)) * rr;
+        // Soft: jitter the sample over the light's disk. Hard: aim at the center
+        // (deterministic → noise-free, crisp shadow edge).
+        vec3 sample_pos = l.position;
+        if (soft_shadows == 1) {
+            vec3 a = abs(ldir_c.x) > 0.9 ? vec3(0,1,0) : vec3(1,0,0);
+            vec3 u = normalize(cross(ldir_c, a));
+            vec3 v = cross(ldir_c, u);
+            float rr  = l.radius * sqrt(random_float(seed));
+            float phi = 2.0 * PI * random_float(seed);
+            sample_pos = l.position + (u * cos(phi) + v * sin(phi)) * rr;
+        }
 
         vec3  lvec  = sample_pos - shadow_origin;
         float ldist = length(lvec);
@@ -373,7 +385,7 @@ vec3 compute_direct(vec3 shadow_origin, vec3 normal, inout uint seed) {
     // Directional lights: cone-sample within the angular radius → soft shadows.
     for (int i = 0; i < num_dir_lights; i++) {
         GPUDirLight dl = dir_lights[i];
-        vec3 ldir = sample_cone(dl.direction, dl.cos_angular, seed);
+        vec3 ldir = (soft_shadows == 1) ? sample_cone(dl.direction, dl.cos_angular, seed) : dl.direction;
         float ndotl = max(0.0, dot(normal, ldir));
         if (ndotl <= 0.0) continue;
         vec3 vis = shadow_transmittance(shadow_origin, ldir, 1e38);
@@ -392,7 +404,7 @@ vec3 compute_direct(vec3 shadow_origin, vec3 normal, inout uint seed) {
         float cos_max = sqrt(1.0 - sin2);
         float omega   = 2.0 * PI * (1.0 - cos_max);
 
-        vec3 ldir = sample_cone(ldir_c, cos_max, seed);
+        vec3 ldir = (soft_shadows == 1) ? sample_cone(ldir_c, cos_max, seed) : ldir_c;
         float ndotl = max(0.0, dot(normal, ldir));
         if (ndotl <= 0.0) continue;
 
@@ -459,6 +471,13 @@ void main() {
 
         GPUMaterial mat = materials[hit.mat_index];
 
+        // Refraction disabled: render glass as a solid matte object (transmission
+        // cleared, roughness forced so it still receives direct lighting).
+        if (mat.transmission > 0.0 && enable_refraction == 0) {
+            mat.transmission = 0.0;
+            mat.roughness = 1.0;
+        }
+
         // Emissive — early out (gated to avoid double-counting NEE)
         if (mat.emission > 0.0) {
             if (allow_emissive) final_color += throughput * mat.base_color * mat.emission;
@@ -507,22 +526,40 @@ void main() {
 
             final_color += throughput * mat.base_color * (direct + ambient);
 
-            // Scatter
+            // Scatter weights gated by the feature toggles: specular (mirror) rises
+            // as roughness falls, diffuse (GI) rises with roughness. A surface whose
+            // behaviour is disabled contributes no bounce — so a matte surface with
+            // GI off stays matte (does NOT become a mirror), a mirror with
+            // reflections off stops reflecting, and Flat mode skips all bounces.
+            float spec_w = (enable_reflections == 1) ? (1.0 - mat.roughness) : 0.0;
+            float diff_w = (enable_indirect == 1)    ? mat.roughness         : 0.0;
+            if (spec_w + diff_w <= 1e-4) break; // direct + ambient only
+
+            // The direction is chosen by which feature is on, so each stays correct
+            // alone: with GI off the bounce is a pure (deterministic) reflection.
             vec3 reflect_dir = reflect(normalize(ray.direction), hit.normal);
-            vec3 diffuse_dir = normalize(hit.normal + random_unit_vector(seed));
-            vec3 new_dir     = normalize(mix(reflect_dir, diffuse_dir, mat.roughness));
-            if (dot(new_dir, hit.normal) < 0.0) new_dir = diffuse_dir;
+            vec3 diffuse_dir = (enable_indirect == 1)
+                ? normalize(hit.normal + random_unit_vector(seed))
+                : reflect_dir;
+            vec3 new_dir;
+            if (enable_reflections == 1 && enable_indirect == 1)
+                new_dir = normalize(mix(reflect_dir, diffuse_dir, mat.roughness));
+            else if (enable_indirect == 1)
+                new_dir = diffuse_dir;   // reflections off → pure diffuse GI
+            else
+                new_dir = reflect_dir;   // GI off → pure mirror (no noise)
+            if (dot(new_dir, hit.normal) < 0.0) new_dir = (enable_indirect == 1) ? diffuse_dir : reflect_dir;
 
             float white_blend = (1.0 - mat.metallic) * (1.0 - mat.roughness);
             vec3  bounce_tint = mix(mat.base_color, vec3(1.0), white_blend);
-            float bw          = (1.0 - mat.roughness) + mat.roughness*0.5;
+            float bw          = spec_w + diff_w * 0.5;
 
             ray.origin    = shadow_origin;
             ray.direction = new_dir;
             throughput   *= bounce_tint * bw;
-            // Near-mirror surfaces may still show emitters; rougher (diffuse)
-            // surfaces already received emitter light through NEE.
-            allow_emissive = (mat.roughness < 0.1);
+            // A specular bounce may show emitters; a diffuse one already got them
+            // via NEE. With GI off the bounce is always specular.
+            allow_emissive = (mat.roughness < 0.1) || (enable_indirect == 0);
         }
     }
 

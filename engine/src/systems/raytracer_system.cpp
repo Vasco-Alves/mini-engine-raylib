@@ -142,6 +142,35 @@ namespace me::systems {
 		}
 	}
 
+	void RaytracerSystem::render_realtime_frame(me::Registry& registry,
+		const me::components::CameraComponent& camera,
+		const me::components::TransformComponent& cam_transform) {
+
+		// Borrow the progressive-accumulation machinery for an in-frame burst:
+		// N samples accumulate, the frame is done, and the next frame starts
+		// fresh because the scene has moved.
+		const bool saved_accumulate = accumulate;
+		const int  saved_target = preview_samples;
+		const int  samples = std::max(1, play_samples_per_frame);
+		accumulate = true;
+		// on_update early-outs once m_FrameCount reaches the target, and the
+		// counter sits at k+1 after k samples — +1 so all N samples render.
+		preview_samples = samples + 1;
+
+		// With a locked pattern the per-pixel seed salt restarts identically
+		// every frame (it still varies across the N samples *within* a frame),
+		// so the residual noise reads as a fixed dither, not animated static.
+		if (lock_noise_pattern) m_TotalFramesRendered = 0;
+
+		reset_accumulation(&registry); // things moved: rebuild BVH + SSBOs
+
+		for (int i = 0; i < samples; ++i)
+			on_update(registry, camera, cam_transform);
+
+		accumulate = saved_accumulate;
+		preview_samples = saved_target;
+	}
+
 	bool RaytracerSystem::focus_on_ray(me::Registry& registry, const Vector3& origin, const Vector3& dir) {
 		if (m_BVH.empty()) return false;
 
@@ -413,7 +442,12 @@ namespace me::systems {
 
 		if (!hit) return sky_color(ray.direction);
 
-		const HitPayload& p = *hit;
+		// Mutable copy: refraction-disabled glass is rewritten to a matte solid.
+		HitPayload p = *hit;
+		if (!enable_refraction && p.transmission > 0.0f) {
+			p.transmission = 0.0f;
+			p.roughness = 1.0f;
+		}
 		Vector3 shadow_origin = Vector3Add(p.hit_point, Vector3Scale(p.normal, 0.001f));
 
 		// ==========================================
@@ -451,14 +485,18 @@ namespace me::systems {
 			if (center_dist < 1e-4f) continue;
 			Vector3 ldir_c = Vector3Scale(to_l, 1.0f / center_dist);
 
-			// Sample a point on a disk of radius l.radius facing the receiver.
-			Vector3 a = (std::abs(ldir_c.x) > 0.9f) ? Vector3{ 0.0f, 1.0f, 0.0f } : Vector3{ 1.0f, 0.0f, 0.0f };
-			Vector3 u = Vector3Normalize(Vector3CrossProduct(ldir_c, a));
-			Vector3 vv = Vector3CrossProduct(ldir_c, u);
-			float   rr = l.radius * std::sqrt(random_float(seed));
-			float   phi = 2.0f * PI * random_float(seed);
-			Vector3 sample_pos = Vector3Add(lt->position,
-				Vector3Add(Vector3Scale(u, std::cos(phi) * rr), Vector3Scale(vv, std::sin(phi) * rr)));
+			// Soft: jitter the sample over the light's disk. Hard: aim at the
+			// center (deterministic → noise-free, crisp shadow edge).
+			Vector3 sample_pos = lt->position;
+			if (enable_soft_shadows) {
+				Vector3 a = (std::abs(ldir_c.x) > 0.9f) ? Vector3{ 0.0f, 1.0f, 0.0f } : Vector3{ 1.0f, 0.0f, 0.0f };
+				Vector3 u = Vector3Normalize(Vector3CrossProduct(ldir_c, a));
+				Vector3 vv = Vector3CrossProduct(ldir_c, u);
+				float   rr = l.radius * std::sqrt(random_float(seed));
+				float   phi = 2.0f * PI * random_float(seed);
+				sample_pos = Vector3Add(lt->position,
+					Vector3Add(Vector3Scale(u, std::cos(phi) * rr), Vector3Scale(vv, std::sin(phi) * rr)));
+			}
 
 			Vector3 lvec = Vector3Subtract(sample_pos, shadow_origin);
 			float   ldist = Vector3Length(lvec);
@@ -496,7 +534,7 @@ namespace me::systems {
 			Vector3 ldir_base = { -fwd.x, -fwd.y, -fwd.z };
 
 			float   cos_max = std::cos(dl.angular_radius * DEG2RAD);
-			Vector3 ldir = sample_cone(ldir_base, cos_max, seed);
+			Vector3 ldir = enable_soft_shadows ? sample_cone(ldir_base, cos_max, seed) : ldir_base;
 			float   ndotl = std::max(0.0f, Vector3DotProduct(p.normal, ldir));
 			if (ndotl <= 0.0f) continue;
 
@@ -524,9 +562,9 @@ namespace me::systems {
 			float cos_max = std::sqrt(1.0f - sin2);
 			float omega = 2.0f * PI * (1.0f - cos_max);
 
-			// Aim the shadow ray at a random point inside the emitter's cone (instead
-			// of dead-center) so the penumbra softens as samples accumulate.
-			Vector3 ldir = sample_cone(ldir_c, cos_max, seed);
+			// Soft: aim at a random point inside the emitter's cone so the penumbra
+			// softens as samples accumulate. Hard: aim at the center (no noise).
+			Vector3 ldir = enable_soft_shadows ? sample_cone(ldir_c, cos_max, seed) : ldir_c;
 			float   ndotl = std::max(0.0f, Vector3DotProduct(p.normal, ldir));
 			if (ndotl <= 0.0f) continue;
 
@@ -560,6 +598,24 @@ namespace me::systems {
 		// ==========================================
 		// 5. BOUNCE (GI + Reflections + Refractions)
 		// ==========================================
+		// Opaque scatter weights, gated by the feature toggles: specular strength
+		// rises as roughness falls (mirrors), diffuse (GI) strength rises with
+		// roughness (matte). A surface whose behaviour is disabled contributes no
+		// bounce — so a matte surface with GI off stays matte (it does NOT become
+		// a mirror), a mirror with reflections off stops reflecting, and Flat mode
+		// skips all opaque bounces. Direct + ambient still show.
+		if (p.transmission <= 0.0f) {
+			float spec_w = enable_reflections ? (1.0f - p.roughness) : 0.0f;
+			float diff_w = enable_indirect ? p.roughness : 0.0f;
+			if (spec_w + diff_w <= 1e-4f) {
+				return Vector3{
+					p.base_color.x * (direct.x + ambient.x),
+					p.base_color.y * (direct.y + ambient.y),
+					p.base_color.z * (direct.z + ambient.z)
+				};
+			}
+		}
+
 		float survival_p = 1.0f;
 
 		// --- RUSSIAN ROULETTE ---
@@ -614,17 +670,32 @@ namespace me::systems {
 
 		} else {
 			// ---- Opaque / Solid path ----
+			// Reflection (specular) and GI (diffuse) are the two ends of one bounce
+			// ray, blended by roughness. The direction is chosen by which feature
+			// is enabled, so each stays correct on its own: with GI off the bounce
+			// is a pure (deterministic) reflection — a matte surface just won't
+			// bounce at all (its weight is zero, handled above) rather than turning
+			// into a mirror.
 			Vector3 reflect_dir = Vector3Normalize(Vector3Reflect(ray.direction, p.normal));
-			Vector3 diffuse_dir = Vector3Normalize(Vector3Add(p.normal, random_unit_vector(seed)));
-			bounce_dir = Vector3Normalize(Vector3Lerp(reflect_dir, diffuse_dir, p.roughness));
+			Vector3 diffuse_dir = enable_indirect
+				? Vector3Normalize(Vector3Add(p.normal, random_unit_vector(seed)))
+				: reflect_dir;
 
-			if (Vector3DotProduct(bounce_dir, p.normal) < 0.0f) bounce_dir = diffuse_dir;
+			if (enable_reflections && enable_indirect)
+				bounce_dir = Vector3Normalize(Vector3Lerp(reflect_dir, diffuse_dir, p.roughness));
+			else if (enable_indirect)
+				bounce_dir = diffuse_dir;   // reflections off → pure diffuse GI
+			else
+				bounce_dir = reflect_dir;   // GI off → pure mirror (no noise)
+
+			if (Vector3DotProduct(bounce_dir, p.normal) < 0.0f)
+				bounce_dir = enable_indirect ? diffuse_dir : reflect_dir;
 
 			bounce_origin = Vector3Add(p.hit_point, Vector3Scale(p.normal, 0.001f));
 
-			// Near-mirror surfaces are specular enough to show emitters; rougher
-			// surfaces are diffuse and already received emitter light via NEE.
-			next_allow_emissive = (p.roughness < 0.1f);
+			// A specular bounce may show emitters; a diffuse one already got them
+			// via NEE. With GI off the bounce is always specular.
+			next_allow_emissive = (p.roughness < 0.1f) || !enable_indirect;
 		}
 
 		Vector3 bounce_color = trace_ray({ bounce_origin, bounce_dir }, depth + 1, seed, next_allow_emissive);
@@ -650,8 +721,11 @@ namespace me::systems {
 			}
 			bounce = { bounce_color.x * absorb.x, bounce_color.y * absorb.y, bounce_color.z * absorb.z };
 		} else {
-			float sw = 1.0f - p.roughness;
-			float dw = p.roughness;
+			// Weights gated by the toggles (match the skip test above): a disabled
+			// end contributes nothing, so the bounce magnitude is correct even
+			// though the single bounce ray went one way.
+			float sw = enable_reflections ? (1.0f - p.roughness) : 0.0f;
+			float dw = enable_indirect ? p.roughness : 0.0f;
 			float bw = sw + dw * 0.5f;
 
 			// FIX: Only smooth plastics reflect pure white. Everything else uses base_color!
@@ -859,12 +933,19 @@ namespace me::systems {
 			m_GPUDirLights.push_back(gd);
 		}
 
-		me::logger::info("GPU Buffers Flattened: " + std::to_string(m_GPUNodes.size()) + " Nodes, " +
+		// Flattening runs every frame in RT Play (and on every edit in Render
+		// mode) — only log when the scene's shape actually changed, or the
+		// console becomes an unreadable loop of identical lines.
+		std::string summary = std::to_string(m_GPUNodes.size()) + " Nodes, " +
 			std::to_string(m_GPUTriangles.size()) + " Triangles, " +
 			std::to_string(m_GPUPrimitives.size()) + " Prims, " +
 			std::to_string(m_GPUPointLights.size()) + " PointLights, " +
 			std::to_string(m_GPUDirLights.size()) + " DirLights, " +
-			std::to_string(m_GPUEmitters.size()) + " Emitters.");
+			std::to_string(m_GPUEmitters.size()) + " Emitters.";
+		if (summary != m_LastFlattenSummary) {
+			m_LastFlattenSummary = summary;
+			me::logger::info("GPU Buffers Flattened: " + summary);
+		}
 	}
 
 	void RaytracerSystem::upload_to_gpu() {
@@ -927,8 +1008,6 @@ namespace me::systems {
 			me::render::gpu::GPUEmitter dummy{};
 			m_ssboEmitters = rlLoadShaderBuffer(sizeof(dummy), &dummy, RL_DYNAMIC_DRAW);
 		}
-
-		me::logger::info("GPU SSBOs Uploaded Successfully.");
 	}
 
 	void RaytracerSystem::render_gpu_path(me::Registry& registry, const me::components::CameraComponent& camera, const me::components::TransformComponent& cam_transform) {
@@ -999,6 +1078,16 @@ namespace me::systems {
 		rlSetUniform(loc_focus, &focus_distance, RL_SHADER_UNIFORM_FLOAT, 1);
 		int loc_firefly = rlGetLocationUniform(m_ComputeShaderProgram, "firefly_clamp");
 		rlSetUniform(loc_firefly, &firefly_clamp, RL_SHADER_UNIFORM_FLOAT, 1);
+
+		// Feature toggles (int 0/1) — must match the CPU integrator exactly.
+		int soft = enable_soft_shadows ? 1 : 0;
+		int refl = enable_reflections ? 1 : 0;
+		int refr = enable_refraction ? 1 : 0;
+		int indir = enable_indirect ? 1 : 0;
+		rlSetUniform(rlGetLocationUniform(m_ComputeShaderProgram, "soft_shadows"), &soft, RL_SHADER_UNIFORM_INT, 1);
+		rlSetUniform(rlGetLocationUniform(m_ComputeShaderProgram, "enable_reflections"), &refl, RL_SHADER_UNIFORM_INT, 1);
+		rlSetUniform(rlGetLocationUniform(m_ComputeShaderProgram, "enable_refraction"), &refr, RL_SHADER_UNIFORM_INT, 1);
+		rlSetUniform(rlGetLocationUniform(m_ComputeShaderProgram, "enable_indirect"), &indir, RL_SHADER_UNIFORM_INT, 1);
 
 		// 3. Bind the Output Texture
 		// We tell OpenGL: "Take m_OutputTexture, and let the Compute Shader write directly into its memory!"

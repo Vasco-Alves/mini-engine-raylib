@@ -38,11 +38,12 @@ The engine exposes a small free-function API (`me::init`, `me::run`, `me::get_re
 `me::run` owns the main loop. Each frame it:
 
 1. polls input and updates window state,
-2. calls `me::world_update(dt)` — the canonical simulation step: **scripts → physics → transforms** (scripts and physics gated by play/pause/step; transforms always run),
+2. calls `me::world_update(dt)` — the canonical simulation step: **scripts → physics → collision callbacks → transforms** (scripts and physics gated by play/pause/step; transforms always run),
 3. calls `app.on_update(dt)`,
 4. pumps streamed music (`me::audio::update()`),
 5. brackets `app.on_render()` between `BeginDrawing` / `EndDrawing`,
-6. processes deferred ECS deletions, releasing native handles (audio/model/texture) first.
+6. processes deferred ECS deletions, releasing native handles (audio/model/texture) first,
+7. applies a pending scene switch (Lua's `Scene.load` defers to here, the only point where no system is iterating the registry; mid-play the physics world is rebuilt around the new scene).
 
 `world_update` runs physics *before* the transform pass, so a body moved by physics gets its world matrix rebuilt the same frame (no one-frame lag). The **spatial-audio** system and all **rendering/tooling** stay consumer-side — the editor calls them in `on_update` / `on_render`, since the audio listener and the viewport are front-end-specific.
 
@@ -53,6 +54,7 @@ me::run:
   input::poll
   world_update(dt):                            // shared simulation order
       (if playing) script_update -> physics::update   // logic sets velocities, Jolt integrates
+      (if playing) script_dispatch_collisions          // on_collision_enter/exit from that step
       transform_update                                 // hierarchy → world matrices (post-physics)
   EditorApp::on_update(dt):
       file-drop import, editor camera fly/orbit
@@ -116,8 +118,11 @@ The walk is hardened against corrupt scene files: a visited set breaks parent **
 ## Rendering
 
 - **Forward renderer** ([`renderer.cpp`](../engine/src/render/renderer.cpp)) loads `engine://shaders/lighting.{vs,fs}`, uploads up to 8 point lights + one directional light, binds per-object material uniforms, and draws `Shape3DComponent` primitives and `Model3DComponent` meshes using each transform's cached matrix.
+- **Directional-light shadows**: `render::render_shadows(focus)` renders a depth-only pass from the sun's view into a depth texture (orthographic volume centered on `focus` — the viewer's camera — with texel snapping so edges don't shimmer); the lighting shader samples it with 3×3 PCF and a slope-scaled bias, attenuating only the directional light's contribution. The volume extent and map resolution are **per-light** fields on `DirectionalLightComponent` (inspector-tunable, serialized; defaults 60 units / 2048²) — the depth target is recreated lazily when the resolution changes. **Front-end contract**: the pass binds its own framebuffer, so call it once per frame *before* binding the final render target (the editor calls it before the viewport texture; the game runtime at the top of `on_render`). The depth pass reuses the same `draw_geometry` path as the main pass, so the two can't drift. Each `DirectionalLightComponent` carries a `cast_shadows` toggle; point lights don't cast real-time shadows (the path tracer shadows everything regardless).
 - **Path tracer** ([`raytracer_system.cpp`](../engine/src/systems/raytracer_system.cpp)) has a CPU backend and a GPU compute-shader backend (`raytracer.comp`) kept feature-equal: next-event estimation, area-light soft shadows, inverse-square falloff, glass with Fresnel + Beer–Lambert tinting (per-material tint strength), depth of field with click-to-focus, exposure, firefly clamping, an art-directable sky, ACES tonemapping and progressive accumulation. The scene is flattened into SSBO-friendly arrays (nodes/triangles/materials/primitives/lights/emitters) and rebuilt on `reset_accumulation(&registry)`.
 - **GPU dispatch is banded**: large frames render in horizontal row bands (budget scaled by bounce count) so no single dispatch can outlive the OS GPU watchdog (TDR) at export resolutions. On platforms without compute shaders (macOS caps OpenGL at 4.1) the GPU backend simply never initializes and the CPU backend keeps working.
+- **Real-time path tracing (RT Play / raytraced games)**: `RaytracerSystem::render_realtime_frame` burst-renders `play_samples_per_frame` samples per game frame with a full scene rebuild (things moved), borrowing the progressive-accumulation machinery. With `lock_noise_pattern` the per-pixel seed salt resets every frame, freezing residual noise into a stable dither. The editor's toolbar "RT" toggle drives this in Play mode (viewport shows the raytracer output); exported games opt in via `"renderer": "raytraced"` + an `"rt"` settings block in `game_config.json` (written by the export dialog from the current Raytracer Settings) and upscale the low-res result with nearest filtering. Practical only at low internal resolutions — that's the retro/pixelated aesthetic the mode is for.
+- **Feature toggles** (`enable_indirect` / `enable_soft_shadows` / `enable_reflections` / `enable_refraction`, plus `RenderQualityPreset` Full/Lite/Flat): every noise source in the integrator is a stochastic sample (diffuse GI direction, soft-shadow disk/cone, glossy jitter, DoF lens), so disabling the stochastic features makes the image fully deterministic — noise-free at one sample. The flags gate the *same* spots in both backends (CPU `trace_ray`, GPU `raytracer.comp`) and must stay in lockstep: soft-shadow-off aims shadow rays at light centers; refraction-off rewrites glass to a matte solid; the opaque scatter blends a specular end and a diffuse end whose presence the reflection/GI flags control (both off → no bounce). The flags ride along in the export `"rt"` block, so a shipped game renders with exactly the look set in the editor.
 - **Offline rendering** is editor-side
   ([`editor_offline_render.cpp`](../editor/src/core/editor_offline_render.cpp)): the PNG export and the animation render own the raytracer while they run (the viewport pass and its resolution tracker pause), render at their own resolution/samples, and restore the viewport configuration afterwards.
 
@@ -155,4 +160,4 @@ Every structural item from the original review is done — the registry-driven a
 - **EventBus has no unsubscribe** — fine while subscribers are process-lifetime (they are), but `this`-capturing handlers would dangle if a subscriber were ever recreated.
 - **Linux and macOS are untested in practice.** All dependencies are cross-platform and the presets exist, but no real build has been validated; on macOS the GPU path-tracer backend is permanently unavailable (no compute shaders in Apple's OpenGL — the CPU backend is the fallback, a Metal/wgpu backend the eventual answer).
 - **Animation**: entity tracks re-bind by Tag *name* across scene loads (rename + save keeps them; duplicate names bind to the first match), and entity keys are edited by re-capture ("Update From Scene") rather than per-field editing.
-- **Lua is the gameplay ceiling for shipped-engine users** — the binding surface in `script_manager.cpp` defines what exported games can do; growing it is the highest-leverage post-1.0 work.
+- **Lua is the gameplay ceiling for shipped-engine users** — the binding surface in `script_manager.cpp` defines what exported games can do. The post-1.0 surface grew into a real gameplay API: entity lookup/spawning, scene switching, Vector3 math, component access, physics velocities/impulses, **collision callbacks** (Jolt ContactListener → buffered pair events → `on_collision_enter/exit` after the step), **trigger volumes** and **raycasts** — see [LUA_API.md](LUA_API.md). The biggest remaining physics gaps are capsule/mesh colliders and a character controller. Note: body sleeping is disabled — Jolt reports contact removal when an island sleeps, which would fire false `on_collision_exit` on resting bodies; at this engine's scene scale keeping bodies awake is the simple, correct trade.

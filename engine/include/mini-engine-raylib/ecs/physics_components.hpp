@@ -16,6 +16,10 @@ namespace me::components {
 		float bounciness = 0.2f;
 		float friction = 0.5f;
 
+		// Sensor body: overlaps fire collision callbacks but produce no physical
+		// response (pickups, damage zones, level-exit volumes).
+		bool is_trigger = false;
+
 		// Store Jolt BodyID
 		uint32_t runtime_body_id = 0xFFFFFFFF;
 	};

@@ -137,6 +137,10 @@ namespace editor {
 		int  m_ExportGameW = 1280;
 		int  m_ExportGameH = 720;
 		bool m_ExportGameVsync = true;
+		// Ship the game with the path tracer as its renderer (retro/pixelated
+		// real-time RT). The rt settings are captured from the Raytracer
+		// Settings panel at export time.
+		bool m_ExportGameRaytraced = false;
 		std::string m_ExportGameScene; // vfs path of the scene the game boots into
 		PendingAction m_PendingAction = PendingAction::None;
 		std::string m_PendingScenePath;
@@ -144,6 +148,11 @@ namespace editor {
 		// --- Unsaved-changes marker (window title "*") ---
 		bool m_SceneDirty = false;
 		std::string m_LastWindowTitle;
+
+		// Set when a Lua script calls Engine.quit() during play; honored at the
+		// top of on_update (stopping mid-script would destroy the script pool
+		// while it's being iterated).
+		bool m_QuitToEditorRequested = false;
 
 		// --- Help windows ---
 		bool m_ShowAboutModal = false;
@@ -205,6 +214,12 @@ namespace editor {
 
 		// --- Sub-Systems ---
 		me::systems::RaytracerSystem m_Raytracer;
+
+		// Play mode renders through the path tracer (toolbar "RT" toggle, set in
+		// Edit mode). The raytracer starts/stops with play, renders one burst of
+		// samples per frame from the scene camera, and the viewport shows its
+		// output instead of the raster view.
+		bool m_RaytracePlayMode = false;
 
 		// --- UI Panels ---
 		SceneHierarchyPanel m_HierarchyPanel;

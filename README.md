@@ -2,7 +2,7 @@
 
 **A small scene engine built on [raylib](https://www.raylib.com/). Build a scene once — press Play to run it as a game, or press Render to path-trace it into stills and animations.**
 
-> Version 1.0.0 · C++23 · MIT · Windows (primary), Linux (builds, lightly tested), macOS (experimental: CPU path tracing only — Apple's OpenGL has no compute shaders)
+> Version 1.1.0 · C++23 · MIT · Windows (primary), Linux (builds, lightly tested), macOS (experimental: CPU path tracing only — Apple's OpenGL has no compute shaders)
 
 ![Editor](docs/images/editor_hero.png)
 
@@ -26,17 +26,19 @@ Switching is one click on the toolbar; the viewport frame, toolbar badge and win
 - **Component registry** — one registration per component drives scene serialization, duplication, native-handle cleanup, undoable add/remove *and* animation.
 - **Scene serialization** — scenes are JSON; projects have their own asset folders.
 - **Lua scripting** — per-entity scripts with `start`/`update` callbacks and hot-reload ([sol3](vendor/sol3) + Lua).
-- **Physics** — rigid bodies and box/sphere colliders via [Jolt](vendor/joltphysics).
+- **Physics** — rigid bodies and box/sphere colliders via [Jolt](vendor/joltphysics), with collision callbacks into Lua, trigger volumes, and raycasts.
 - **Audio** — sound effects and streaming music with simple 3D spatialization.
 
 ### Game side
 
-- Real-time forward renderer with a custom lighting shader (point + directional lights).
+- Real-time forward renderer with a custom lighting shader (point + directional lights) and **directional-light shadow maps** (PCF-filtered, camera-following, per-light toggle).
 - Play mode runs the full simulation loop (scripts → physics → transforms) with pause and single-step controls.
 
 ### Render side
 
 - **Path tracer** (CPU and GPU compute backends with matching features): next-event estimation, soft shadows from area lights, inverse-square falloff, glass with Fresnel + Beer–Lambert tinting (with per-material tint strength), depth of field with click-to-focus, exposure, firefly clamping, art-directable sky, ACES tonemapping, progressive accumulation.
+- **RT Play** — flip the toolbar's "RT" toggle and Play mode renders through the path tracer in real time, built for retro/pixelated games: low internal resolution buys the per-frame samples, and a locked noise pattern turns residual grain into stable dithering. Export Game can ship the same renderer (`Raytraced renderer` checkbox).
+- **Feature toggles + quality presets** (Full / Lite / Flat) — turn off the *stochastic* features (indirect GI, soft shadows) and the image is noise-free at one sample per pixel, mirrors and sharp glass still intact, running at full framerate. The Flat preset (direct light + hard shadows) is a crisp, zero-noise renderer ideal for a simple game; presets and toggles ship with raytraced exports.
 - **Watchdog-safe GPU dispatch** — large frames render in row bands so heavy exports can't trigger an OS driver reset.
 - **PNG export** — its own resolution/samples/bounces, independent of the viewport, with progress and cancel.
 - **Animation** — keyframe the camera (position, look-at, FOV, exposure, focus) *and* entity components (Transform, Material, lights, shapes); scrub, preview in the viewport, then render an image sequence ready for `ffmpeg`.
@@ -159,13 +161,20 @@ end
 
 function update(self, dt)
     if Input.action_down("MoveRight") then
-        self:set_velocity(5, 0, 0)   -- requires a RigidBody
+        self:set_velocity(5, 0, 0)            -- requires a RigidBody
     end
-    self:add_offset(0, dt, 0)        -- move up over time
+    if Input.action_pressed("Jump") then
+        local fx = Scene.spawn(Scene.find("ExplosionTemplate")) -- prefab-style spawning
+        fx:teleport(0, 2, 0)
+        fx:play_sound()
+    end
+    if self:get_transform().position.y < -50 then
+        Scene.load("game://scenes/game_over.json")  -- switch scenes (menus, levels, ...)
+    end
 end
 ```
 
-Saving the file hot-reloads it in play mode. See the Lua bindings in [`script_manager.cpp`](engine/src/scripting/script_manager.cpp).
+Scripts can also define `on_collision_enter(self, other)` / `on_collision_exit(self, other)`, which fire after the physics step (mark a RigidBody **Is Trigger** for sensor volumes). The API covers entity lookup/spawning/destruction, transforms with full `Vector3` math, materials and lights, the camera, physics velocities/impulses/raycasts, sounds and music, scene switching and `Engine.quit()` — see the **[Lua scripting reference](docs/LUA_API.md)**. Saving the file hot-reloads it in play mode.
 
 ## Architecture
 

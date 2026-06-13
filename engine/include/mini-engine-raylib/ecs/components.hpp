@@ -60,6 +60,13 @@ namespace me::components {
 		me::Color color = me::Color::white;
 		float intensity = 1.0f;
 		float angular_radius = 1.0f; // sun half-angle in DEGREES; drives soft-shadow penumbra (0 = hard)
+		bool cast_shadows = true;    // real-time shadow map in Play/Edit (the path tracer always shadows)
+
+		// Real-time shadow-map tuning. Extent is the world-unit width of the area
+		// (centered on the camera) that receives shadows: smaller = sharper but
+		// shadows end closer; resolution is the depth map size per side.
+		float shadow_extent = 60.0f;
+		int shadow_resolution = 2048;
 	};
 
 	struct CameraComponent {
