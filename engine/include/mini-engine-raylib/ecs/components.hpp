@@ -42,6 +42,18 @@ namespace me::components {
 		// --- MATRIX CACHING ---
 		Matrix model_matrix = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
 
+		// World-space position. For a child this is the parent-relative `position`
+		// pushed through the cached world matrix (so a camera parented to a player
+		// follows it); for a root the two are identical. Roots that live outside
+		// the ECS (the editor fly-cam, the game's fallback view) don't get a
+		// maintained model_matrix, hence the parent check rather than always
+		// reading the matrix.
+		Vector3 world_position() const {
+			if (parent != me::entity::null)
+				return { model_matrix.m12, model_matrix.m13, model_matrix.m14 };
+			return position;
+		}
+
 		Vector3 last_position = { 0.0f, 0.0f, 0.0f };
 		Vector3 last_rotation = { 0.0f, 0.0f, 0.0f };
 		Vector3 last_scale = { 0.0f, 0.0f, 0.0f };

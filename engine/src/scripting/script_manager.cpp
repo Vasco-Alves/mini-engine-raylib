@@ -2,6 +2,8 @@
 #include <iostream>
 #include <optional>
 #include <cstdio>
+#include <cmath>
+#include <algorithm>
 #include "mini-engine-raylib/core/engine.hpp"
 #include "mini-engine-raylib/core/logger.hpp"
 #include "mini-engine-raylib/core/events.hpp"
@@ -194,6 +196,38 @@ namespace me::scripting {
 				return e.try_get_component<me::components::CameraComponent>();
 			},
 
+			// First-person look: aims the entity's Camera from yaw/pitch (degrees)
+			// using the entity's own position as the eye — the same convention as
+			// the editor fly-camera, so a player entity with a Camera becomes an FPS
+			// camera in one call per frame. Pitch is clamped to avoid flipping over
+			// the poles. No-op without both a Transform and a Camera.
+			"set_look", [](me::Entity& ent, float yaw_deg, float pitch_deg) {
+				if (!ent.is_valid()) return;
+				auto* t = ent.try_get_component<me::components::TransformComponent>();
+				auto* c = ent.try_get_component<me::components::CameraComponent>();
+				if (!t || !c) return;
+				pitch_deg = std::clamp(pitch_deg, -89.9f, 89.9f);
+				float yaw = yaw_deg * DEG2RAD;
+				float pitch = pitch_deg * DEG2RAD;
+				float cp = std::cos(pitch);
+				// World-space eye: when the camera is a child (parented at eye
+				// height to a moving player) its `position` is the local offset, so
+				// aim from the world position the renderer will actually use.
+				Vector3 eye = t->world_position();
+				// Place the target far down the view ray, not one unit ahead. The
+				// eye read here is one frame stale (this runs before physics moves
+				// the body), while the renderer uses the up-to-date eye; with a
+				// near target that mismatch tilts the view a few degrees while
+				// moving and snaps straight on stop. A distant target makes the
+				// sub-frame eye shift angularly negligible — no "bump".
+				const float kFar = 1000.0f;
+				c->target = {
+					eye.x + std::sin(yaw) * cp * kFar,
+					eye.y + std::sin(pitch) * kFar,
+					eye.z + std::cos(yaw) * cp * kFar
+				};
+			},
+
 			// --- physics (all no-ops unless the simulation is running and the
 			//     entity has a RigidBody + collider) ---
 
@@ -282,10 +316,9 @@ namespace me::scripting {
 		// First alive entity whose Tag matches, or nil.
 		scene_table.set_function("find", [](const std::string& name) -> std::optional<me::Entity> {
 			auto& reg = me::get_registry();
-			auto& tags = reg.view<me::components::TagComponent>();
-			for (size_t i = 0; i < tags.size(); ++i) {
-				if (tags.components[i].name == name && reg.is_alive(tags.entity_map[i]))
-					return me::Entity{ tags.entity_map[i], &reg };
+			for (auto [e, tag] : reg.view<me::components::TagComponent>()) {
+				if (tag.name == name && reg.is_alive(e))
+					return reg.get_entity(e);
 			}
 			return std::nullopt;
 		});
@@ -295,10 +328,9 @@ namespace me::scripting {
 			auto& reg = me::get_registry();
 			sol::table result = s_State->create_table();
 			int n = 1;
-			auto& tags = reg.view<me::components::TagComponent>();
-			for (size_t i = 0; i < tags.size(); ++i) {
-				if (tags.components[i].name == name && reg.is_alive(tags.entity_map[i]))
-					result[n++] = me::Entity{ tags.entity_map[i], &reg };
+			for (auto [e, tag] : reg.view<me::components::TagComponent>()) {
+				if (tag.name == name && reg.is_alive(e))
+					result[n++] = reg.get_entity(e);
 			}
 			return result;
 		});
@@ -309,7 +341,7 @@ namespace me::scripting {
 			auto e = reg.create_entity();
 			reg.add_component<me::components::TagComponent>(e.get_id(), { name });
 			reg.add_component<me::components::TransformComponent>(e.get_id(), {});
-			return me::Entity{ e.get_id(), &reg };
+			return e;
 		});
 
 		// Clones an existing entity — the poor man's prefab: keep a template
@@ -338,7 +370,7 @@ namespace me::scripting {
 			}
 
 			me::physics::add_body(reg, clone.get_id());
-			return me::Entity{ clone.get_id(), &reg };
+			return clone;
 		});
 
 		// Deferred scene switch: applied by the engine at the end of the frame.
@@ -359,7 +391,7 @@ namespace me::scripting {
 				if (!hit.hit) return sol::make_object(*s_State, sol::lua_nil);
 
 				sol::table t = s_State->create_table();
-				t["entity"] = me::Entity{ hit.entity, &me::get_registry() };
+				t["entity"] = me::get_registry().get_entity(hit.entity);
 				t["point"] = hit.point;
 				t["normal"] = hit.normal;
 				t["distance"] = hit.distance;
@@ -375,6 +407,13 @@ namespace me::scripting {
 		input_table.set_function("action_pressed", &me::input::action_pressed);
 		input_table.set_function("action_released", &me::input::action_released);
 		input_table.set_function("axis_value", &me::input::axis_value);
+
+		// Cursor capture for mouse-look. lock_cursor hides + centers the cursor so
+		// the mouse delta (LookX/LookY) keeps flowing without the pointer leaving
+		// the window — call it when an FPS starts, unlock_cursor for menus/pause.
+		// (The editor force-unlocks on Stop, so a locked cursor can't get stranded.)
+		input_table.set_function("lock_cursor", &me::input::lock_cursor);
+		input_table.set_function("unlock_cursor", &me::input::unlock_cursor);
 
 		// ===================================================================
 		// 7. ENGINE BINDINGS

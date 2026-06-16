@@ -47,19 +47,13 @@ namespace me::camera {
 
 	void update_free_fly(float dt) {
 		auto& reg = me::get_registry();
-		auto& cam_pool = reg.view<me::components::CameraComponent>();
 
-		for (size_t i = 0; i < cam_pool.size(); ++i) {
-			me::entity::entity_id e = cam_pool.entity_map[i];
-			auto& cam = cam_pool.components[i];
-
+		for (auto [e, cam, t] : reg.view<me::components::CameraComponent, me::components::TransformComponent>()) {
+			(void)e;
 			if (!cam.active) continue;
 
-			auto* t = reg.try_get_component<me::components::TransformComponent>(e);
-			if (!t) continue;
-
 			// Call the new shared math function
-			update_editor_camera(*t, cam, dt);
+			update_editor_camera(t, cam, dt);
 		}
 	}
 

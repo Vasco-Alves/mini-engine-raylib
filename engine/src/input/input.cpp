@@ -119,12 +119,36 @@ namespace me::input {
 			if (v > maxV) return maxV;
 			return v;
 		}
+
+		// Editor playtest gate (see set_input_gate). Open by default so the game
+		// runtime is unaffected. s_lock_intent records the last lock/unlock the
+		// game asked for, so re-opening the gate can restore it.
+		bool s_gate_open = true;
+		bool s_lock_intent = false;
 	}
 
 	void poll() {}
 
-	void lock_cursor() { DisableCursor(); }
-	void unlock_cursor() { EnableCursor(); }
+	void lock_cursor() {
+		s_lock_intent = true;
+		if (s_gate_open) DisableCursor();   // deferred while the editor holds focus
+	}
+	void unlock_cursor() {
+		s_lock_intent = false;
+		EnableCursor();
+	}
+
+	void set_input_gate(bool open) {
+		s_gate_open = open;
+		if (open) {
+			// Hand control back to the game's own cursor choice.
+			if (s_lock_intent) DisableCursor(); else EnableCursor();
+		} else {
+			// Editor took focus: free the mouse regardless of what the game wants.
+			EnableCursor();
+		}
+	}
+	bool is_input_gate_open() { return s_gate_open; }
 
 	void bind_action(const std::string& action, Key key) {
 		auto& v = s_action_key_bindings[action];
@@ -160,14 +184,17 @@ namespace me::input {
 	}
 
 	bool action_down(const std::string& action) {
+		if (!s_gate_open) return false;
 		return any_key_bound(action, &IsKeyDown) || any_mouse_bound(action, &IsMouseButtonDown);
 	}
 
 	bool action_pressed(const std::string& action) {
+		if (!s_gate_open) return false;
 		return any_key_bound(action, &IsKeyPressed) || any_mouse_bound(action, &IsMouseButtonPressed);
 	}
 
 	bool action_released(const std::string& action) {
+		if (!s_gate_open) return false;
 		return any_key_bound(action, &IsKeyReleased) || any_mouse_bound(action, &IsMouseButtonReleased);
 	}
 
@@ -240,6 +267,7 @@ namespace me::input {
 	}
 
 	float axis_value(const std::string& axis_name) {
+		if (!s_gate_open) return 0.0f;
 		float sum = 0.0f;
 
 		if (auto it = s_axis_bindings.find(axis_name); it != s_axis_bindings.end()) {
@@ -267,10 +295,12 @@ namespace me::input {
 	}
 
 	Vector2 mouse_delta() {
+		if (!s_gate_open) return { 0.0f, 0.0f };
 		return { GetMouseDelta().x, GetMouseDelta().y };
 	}
 
 	float mouse_wheel_delta() {
+		if (!s_gate_open) return 0.0f;
 		return GetMouseWheelMove();
 	}
 }

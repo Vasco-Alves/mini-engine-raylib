@@ -22,9 +22,10 @@ namespace me {
 			// Same rule as load(): the outgoing entities must release their
 			// ref-counted asset/audio handles before the pools are wiped.
 			auto& reg = me::get_registry();
-			auto& transforms = reg.view<me::components::TransformComponent>();
-			for (size_t i = 0; i < transforms.size(); ++i)
-				me::ecs::release_native_handles(reg, transforms.entity_map[i]);
+			for (auto [e, t] : reg.view<me::components::TransformComponent>()) {
+				(void)t;
+				me::ecs::release_native_handles(reg, e);
+			}
 			reg.clear();
 		}
 
@@ -42,9 +43,8 @@ namespace me {
 
 			// Every persisted entity carries a Transform, so the transform pool is
 			// our entity enumeration. Each present component is written by the registry.
-			auto& transforms = reg.view<me::components::TransformComponent>();
-			for (size_t i = 0; i < transforms.size(); ++i) {
-				me::entity::entity_id e = transforms.entity_map[i];
+			for (auto [e, t] : reg.view<me::components::TransformComponent>()) {
+				(void)t;
 				if (!reg.is_alive(e)) continue;
 
 				json je;
@@ -107,9 +107,10 @@ namespace me {
 			// handles here — otherwise every scene switch pins the old scene's
 			// models/sounds in memory for the rest of the session. The transform
 			// pool enumerates every persisted entity (same convention as save()).
-			auto& outgoing = reg.view<me::components::TransformComponent>();
-			for (size_t i = 0; i < outgoing.size(); ++i)
-				me::ecs::release_native_handles(reg, outgoing.entity_map[i]);
+			for (auto [e, t] : reg.view<me::components::TransformComponent>()) {
+				(void)t;
+				me::ecs::release_native_handles(reg, e);
+			}
 
 			reg.clear();
 

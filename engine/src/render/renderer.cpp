@@ -159,13 +159,7 @@ namespace me::render {
 	// the depth output matters there).
 	static void draw_geometry(me::Registry& reg, const Shader& model_shader, bool bind_materials) {
 		// --- DRAW 3D PRIMITIVES ---
-		auto& meshPool = reg.view<me::components::Shape3DComponent>();
-		for (size_t i = 0; i < meshPool.size(); ++i) {
-			me::entity::entity_id e = meshPool.entity_map[i];
-			auto& mesh = meshPool.components[i];
-			auto* t = reg.try_get_component<me::components::TransformComponent>(e);
-			if (!t) continue;
-
+		for (auto [e, mesh, t] : reg.view<me::components::Shape3DComponent, me::components::TransformComponent>()) {
 			if (bind_materials) {
 				// Force Raylib to draw waiting geometry before we change shader uniforms
 				rlDrawRenderBatchActive();
@@ -174,7 +168,7 @@ namespace me::render {
 
 			::Color col = to_ray(mesh.color);
 			rlPushMatrix();
-			Matrix glMatrix = MatrixTranspose(t->model_matrix);
+			Matrix glMatrix = MatrixTranspose(t.model_matrix);
 			rlMultMatrixf((float*)&glMatrix);
 
 			if (mesh.type == me::components::Shape3DComponent::Cube) {
@@ -192,13 +186,7 @@ namespace me::render {
 		rlDrawRenderBatchActive();
 
 		// --- DRAW 3D MODELS ---
-		auto& modelPool = reg.view<me::components::Model3DComponent>();
-		for (size_t i = 0; i < modelPool.size(); ++i) {
-			me::entity::entity_id e = modelPool.entity_map[i];
-			auto& modComp = modelPool.components[i];
-			auto* t = reg.try_get_component<me::components::TransformComponent>(e);
-			if (!t) continue;
-
+		for (auto [e, modComp, t] : reg.view<me::components::Model3DComponent, me::components::TransformComponent>()) {
 			if (bind_materials) bind_material(reg, e);
 
 			const ::Model* const_model = me::assets::internal_get_model(modComp.model);
@@ -210,7 +198,7 @@ namespace me::render {
 
 				::Color col = to_ray(modComp.tint);
 				rlPushMatrix();
-				Matrix glMatrix = MatrixTranspose(t->model_matrix);
+				Matrix glMatrix = MatrixTranspose(t.model_matrix);
 				rlMultMatrixf((float*)&glMatrix);
 				DrawModel(*raw_model, { 0.0f, 0.0f, 0.0f }, 1.0f, col);
 				rlPopMatrix();
@@ -225,11 +213,12 @@ namespace me::render {
 		auto& reg = me::get_registry();
 
 		// Same convention as render_world: the first directional light is the sun.
-		auto& dir_pool = reg.view<me::components::DirectionalLightComponent>();
-		if (dir_pool.size() == 0) return;
-		auto& dl = dir_pool.components[0];
+		auto dir_view = reg.view<me::components::DirectionalLightComponent>();
+		auto dir_it = dir_view.begin();
+		if (dir_it == dir_view.end()) return;
+		auto [dir_e, dl] = *dir_it;
 		if (!dl.cast_shadows) return;
-		auto* lt = reg.try_get_component<me::components::TransformComponent>(dir_pool.entity_map[0]);
+		auto* lt = reg.try_get_component<me::components::TransformComponent>(dir_e);
 		if (!lt) return;
 
 		// (Re)create the depth target at the light's configured resolution.
@@ -302,20 +291,17 @@ namespace me::render {
 		// 1. WHICH CAMERA ARE WE USING?
 		// ==========================================
 		if (override_transform && override_cam) {
-			rayCam.position = { override_transform->position.x, override_transform->position.y, override_transform->position.z };
+			rayCam.position = override_transform->world_position();
 			rayCam.target = { override_cam->target.x, override_cam->target.y, override_cam->target.z };
 			rayCam.up = { override_cam->up.x, override_cam->up.y, override_cam->up.z };
 			rayCam.fovy = override_cam->fov;
 			rayCam.projection = override_cam->projection;
 		} else {
-			auto& camPool = reg.view<me::components::CameraComponent>();
-			for (size_t i = 0; i < camPool.size(); ++i) {
-				me::entity::entity_id e = camPool.entity_map[i];
-				auto& cam = camPool.components[i];
+			for (auto [e, cam] : reg.view<me::components::CameraComponent>()) {
 				if (cam.active) {
 					auto* t = reg.try_get_component<me::components::TransformComponent>(e);
 					if (t) {
-						rayCam.position = { t->position.x, t->position.y, t->position.z };
+						rayCam.position = t->world_position();
 						rayCam.target = { cam.target.x, cam.target.y, cam.target.z };
 						rayCam.up = { cam.up.x, cam.up.y, cam.up.z };
 						rayCam.fovy = cam.fov;
@@ -335,12 +321,11 @@ namespace me::render {
 
 			// --- A. Point Lights ---
 			int active_lights = 0;
-			auto& light_pool = reg.view<me::components::LightComponent>();
-			for (size_t i = 0; i < light_pool.size() && active_lights < MAX_LIGHTS; ++i) {
-				me::entity::entity_id e = light_pool.entity_map[i];
-				if (auto* t = reg.try_get_component<me::components::TransformComponent>(e)) {
-					auto& l = light_pool.components[i];
-					Vector3 pos = { t->position.x, t->position.y, t->position.z };
+			for (auto [e, l, t] : reg.view<me::components::LightComponent, me::components::TransformComponent>()) {
+				(void)e;
+				if (active_lights >= MAX_LIGHTS) break;
+				{
+					Vector3 pos = { t.position.x, t.position.y, t.position.z };
 					Vector3 col = { l.color.r / 255.0f, l.color.g / 255.0f, l.color.b / 255.0f };
 					SetShaderValue(s_LightingShader, s_LightPosLoc[active_lights], &pos, SHADER_UNIFORM_VEC3);
 					SetShaderValue(s_LightingShader, s_LightColorLoc[active_lights], &col, SHADER_UNIFORM_VEC3);
@@ -352,11 +337,11 @@ namespace me::render {
 
 			// --- B. Directional Light ---
 			int has_dir_light = 0;
-			auto& dir_pool = reg.view<me::components::DirectionalLightComponent>();
-			if (dir_pool.size() > 0) {
-				me::entity::entity_id e = dir_pool.entity_map[0];
-				if (auto* t = reg.try_get_component<me::components::TransformComponent>(e)) {
-					auto& dl = dir_pool.components[0];
+			auto dir_view = reg.view<me::components::DirectionalLightComponent>();
+			auto dir_it = dir_view.begin();
+			if (dir_it != dir_view.end()) {
+				auto [dir_e, dl] = *dir_it;
+				if (auto* t = reg.try_get_component<me::components::TransformComponent>(dir_e)) {
 					has_dir_light = 1;
 
 					float pitch = t->rotation.x * DEG2RAD;

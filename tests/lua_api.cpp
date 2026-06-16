@@ -114,8 +114,8 @@ int main() {
 	bare.add_component(TagComponent{ "Bare" });
 	bare.add_component(TransformComponent{});
 
-	lua["e"] = me::Entity{ e.get_id(), &reg };
-	lua["bare"] = me::Entity{ bare.get_id(), &reg };
+	lua["e"] = reg.get_entity(e.get_id());
+	lua["bare"] = reg.get_entity(bare.get_id());
 
 	CHECK(run(lua, R"(
 		assert(e:is_valid())
@@ -184,6 +184,25 @@ int main() {
 
 	CHECK(reg.try_get_component<AudioSourceComponent>(e.get_id())->trigger_play);
 	CHECK(reg.try_get_component<BackgroundMusicComponent>(e.get_id())->trigger_play);
+
+	// --- FPS look helper: aims the camera target from yaw/pitch ---
+	// The target sits far down the view ray, so test the normalized direction.
+	CHECK(run(lua, R"(
+		local function dir(t)
+			local l = math.sqrt(t.x*t.x + t.y*t.y + t.z*t.z)
+			return t.x/l, t.y/l, t.z/l
+		end
+		e:get_transform().position = Vector3(0, 0, 0)
+		e:set_look(0, 0)                    -- yaw 0, pitch 0 -> look down +Z
+		local x, y, z = dir(e:get_camera().target)
+		assert(math.abs(x) < 1e-4 and math.abs(y) < 1e-4 and math.abs(z - 1) < 1e-4)
+		e:set_look(90, 0)                   -- yaw 90 -> look down +X
+		x, y, z = dir(e:get_camera().target)
+		assert(math.abs(x - 1) < 1e-3 and math.abs(z) < 1e-3)
+		e:set_look(0, 90)                   -- pitch clamps below 90, so mostly +Y
+		x, y, z = dir(e:get_camera().target)
+		assert(y > 0.99)
+	)"));
 
 	// --- destroyed entities turn inert, not crashy ---
 	CHECK(run(lua, R"(

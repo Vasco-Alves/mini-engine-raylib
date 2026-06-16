@@ -17,7 +17,7 @@ namespace editor {
 			if (m_SelectionContext == me::entity::null || m_Context == nullptr) {
 				return me::Entity(); // Returns an invalid entity
 			}
-			return me::Entity(m_SelectionContext, m_Context);
+			return m_Context->get_entity(m_SelectionContext);
 		}
 
 		void set_selected_entity(me::entity::entity_id entity) { m_SelectionContext = entity; }

@@ -347,6 +347,17 @@ namespace editor {
 			if (ImGui::IsItemHovered())
 				ImGui::SetTooltip("Overlaps fire script collision callbacks but don't physically collide\n(pickups, damage zones, level exits).");
 			track_edit(entity, rb, command_history);
+
+			// Per-axis rotation lock. For an upright character, freeze X and Z so it can't tip over while walking.
+			ImGui::Text("Freeze Rotation");
+			ImGui::SameLine();
+			bool froze = false;
+			froze |= ImGui::Checkbox("X", &rb->freeze_rot_x); ImGui::SameLine();
+			froze |= ImGui::Checkbox("Y", &rb->freeze_rot_y); ImGui::SameLine();
+			froze |= ImGui::Checkbox("Z", &rb->freeze_rot_z);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Locks rotation about each world axis (Dynamic bodies).\nFreeze X+Z to keep a character upright while it walks.");
+			if (froze) track_edit(entity, rb, command_history);
 		}
 
 		void draw_box_collider(me::Entity entity, editor::CommandHistory& command_history) {

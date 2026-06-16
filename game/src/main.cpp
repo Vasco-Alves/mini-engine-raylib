@@ -241,12 +241,11 @@ namespace {
 			out_c = &s_fallback_c;
 
 			auto& reg = me::get_registry();
-			auto& cams = reg.view<me::components::CameraComponent>();
-			for (size_t i = 0; i < cams.size(); ++i) {
-				if (!cams.components[i].active) continue;
-				if (auto* t = reg.try_get_component<me::components::TransformComponent>(cams.entity_map[i])) {
+			for (auto [e, cam] : reg.view<me::components::CameraComponent>()) {
+				if (!cam.active) continue;
+				if (auto* t = reg.try_get_component<me::components::TransformComponent>(e)) {
 					out_t = t;
-					out_c = &cams.components[i];
+					out_c = &cam;
 					return;
 				}
 			}

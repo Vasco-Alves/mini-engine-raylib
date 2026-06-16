@@ -40,6 +40,7 @@ The handle to a scene entity. All component getters return `nil` when the compon
 | `e:get_material()` | [MaterialComponent](#components) or `nil`. |
 | `e:get_light()` / `e:get_directional_light()` | Light components or `nil`. |
 | `e:get_camera()` | [CameraComponent](#components) or `nil`. |
+| `e:set_look(yaw, pitch)` | First-person camera aim: points the entity's Camera from yaw/pitch (degrees), from the entity's **world** position (so a Camera parented to a player at eye height works). Pitch is clamped to ±89.9°. Needs both a Transform and a Camera. |
 | `e:add_offset(x, y, z)` | Moves the transform by a delta (non-physics movement). |
 | `e:teleport(x, y, z)` | Moves the transform **and** the Jolt body, so a physics entity doesn't snap back. Velocity is kept — call `set_velocity(0,0,0)` too for a clean respawn. |
 
@@ -175,7 +176,59 @@ Actions and axes are bound by name in C++ (`engine/src/input/input_defaults.cpp`
 | `Input.action_down(name)` | Held this frame. |
 | `Input.action_pressed(name)` | Went down this frame. |
 | `Input.action_released(name)` | Went up this frame. |
-| `Input.axis_value(name)` | Axis value (e.g. `-1..1` for `MoveX`). |
+| `Input.axis_value(name)` | Axis value (e.g. `-1..1` for `MoveX`, mouse delta for `LookX`/`LookY`). |
+| `Input.lock_cursor()` / `Input.unlock_cursor()` | Capture/release the mouse. Lock it for mouse-look (the cursor hides and recenters so `LookX`/`LookY` keep flowing); unlock for menus. The editor force-unlocks when you Stop, so a locked cursor is never stranded. |
+
+### Playtesting in the editor (focus)
+
+When you press Play in the editor the game starts **unfocused**: it receives no input and the cursor stays free, so you can use the panels (tweak Raytracer Settings, inspect entities) without the camera reacting. **Click the viewport** to focus — input flows to the game and its cursor choice takes effect (an FPS that called `Input.lock_cursor()` locks now). **Press Escape** to unfocus again: the editor takes the mouse back and freezes the game's input, no matter what the game asked for.
+
+So there are two independent things controlling the cursor, which is the key distinction:
+
+- **The game's intent** — `Input.lock_cursor()` / `unlock_cursor()`. This is what a shipped game uses (lock for first-person look, unlock for a menu). It applies whenever the game is focused.
+- **The editor's playtest focus** — click to focus, Escape to release. While unfocused the editor *overrides* the game's intent and frees the cursor, so you can always get back to the tools. A shipped game has no editor, so it's always "focused" and only the game's intent matters.
+
+This means yes — you can test a game that unlocks its own cursor for UI, and still Escape out to change settings: the editor's release wins while you're unfocused, and the game's choice resumes when you click back in. (Editor-only shortcuts like the gizmo keys, Delete and save are also suppressed during Play, so they never fire on your game's keys.)
+
+### A first-person controller
+
+The recommended rig is two entities:
+
+- **Player** (root) — a `RigidBody` (Dynamic) + collider, with **Freeze Rotation X and Z** ticked in the inspector so it can't tip over while walking, and the script below.
+- **PlayerCamera** (a *child* of Player, dragged under it in the hierarchy) — a `Transform` raised to eye height (e.g. local Y ≈ 0.7) and an active `Camera`. As a child it follows the player automatically, and `set_look` aims it from its world position.
+
+The script lives on the player, finds the camera child once, and drives both look and movement:
+
+```lua
+local yaw, pitch = 0, 0
+local cam
+local speed = 6
+
+function start(self)
+    Input.lock_cursor()
+    cam = Scene.find("PlayerCamera")        -- the child camera at eye height
+end
+
+function update(self, dt)
+    -- mouse look: aim the child camera (pitch auto-clamped to ±89.9°)
+    yaw   = yaw   - Input.axis_value("LookX")
+    pitch = pitch - Input.axis_value("LookY")
+    if cam then cam:set_look(yaw, pitch) end
+
+    -- walk in the facing direction. The body's rotation is frozen, so we build
+    -- the move vector from yaw ourselves (forward at yaw 0 is +Z).
+    local fx, fz = math.sin(math.rad(yaw)),  math.cos(math.rad(yaw))   -- forward
+    local rx, rz = math.cos(math.rad(yaw)), -math.sin(math.rad(yaw))   -- right
+    local f = -Input.axis_value("MoveZ")
+    local s = -Input.axis_value("MoveX")
+    local vy = self:get_velocity().y                                   -- keep gravity
+    self:set_velocity((fx*f + rx*s) * speed, vy, (fz*f + rz*s) * speed)
+
+    if Input.action_pressed("Jump") then self:apply_impulse(0, 5, 0) end
+end
+```
+
+(You *can* put the Camera directly on the player instead of using a child — `set_look` works either way — but then the eye sits at the body's center rather than head height. The child gives you a proper eyeline.)
 
 ## Engine
 
@@ -191,4 +244,4 @@ Actions and axes are bound by name in C++ (`engine/src/input/input_defaults.cpp`
 
 - Adding/removing components from Lua — author the components in the editor; `Scene.spawn` covers runtime creation.
 - Asset loading from Lua — assets come in through the components placed in the editor.
-- Capsule/mesh colliders and a character controller — box and sphere shapes only for now.
+- Capsule/mesh colliders and a true character controller — box and sphere shapes only for now (freeze rotation X+Z to keep a box/sphere player upright in the meantime).

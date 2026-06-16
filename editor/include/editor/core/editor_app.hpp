@@ -3,6 +3,7 @@
 #include <raylib.h>
 #include <string>
 #include <vector>
+#include <map>
 #include <filesystem>
 
 #include <mini-engine-raylib/core/application.hpp>
@@ -82,6 +83,13 @@ namespace editor {
 		void save_engine_config();
 		void add_recent_project(const std::string& path);
 
+		// Picks which scene to open when a project loads: the one last edited in
+		// that project, else the first scene file present, else "" (start fresh).
+		std::string resolve_startup_scene(const std::filesystem::path& path);
+		// Records m_CurrentScenePath as this project's last-edited scene (persisted
+		// in the engine config) so the next open reopens it.
+		void remember_last_scene();
+
 		// Packages the prebuilt game runtime (game.exe, built with the engine)
 		// together with this project's assets into a standalone game folder.
 		void export_game();
@@ -99,11 +107,20 @@ namespace editor {
 
 		// --- Scene Management ---
 		void new_scene();
-		void save_scene();
+		// Returns true if the scene was written. An untitled scene (no path yet)
+		// instead opens the Save As modal and returns false, so callers that had
+		// queued a follow-up action can wait until a name is chosen.
+		bool save_scene();
 		void open_save_as_modal();
 		void open_scene(const std::string& vfs_path);
 		void on_play();
 		void on_stop();
+
+		// True when the scene has a camera that can drive the play view: an
+		// active CameraComponent that also has a Transform (the same condition
+		// on_render uses to pick the play camera). When false during Play the
+		// editor fly-cam is the fallback view, so it must stay drivable.
+		bool has_active_scene_camera();
 
 		// --- Unsaved-changes guard ---
 		// request_* check m_SceneDirty first; if dirty they park the action and
@@ -121,6 +138,9 @@ namespace editor {
 		std::string m_CurrentScenePath;
 		SceneState m_SceneState = SceneState::Edit;
 		std::vector<std::string> m_RecentProjects;
+		// Per-project last-edited scene (project folder -> vfs scene path), so a
+		// project reopens where you left off instead of a fixed "main.json".
+		std::map<std::string, std::string> m_LastScenes;
 
 		char m_NewSceneInput[256] = "my_new_scene";
 		int m_GizmoType = 7; // ImGuizmo::TRANSLATE
@@ -153,6 +173,12 @@ namespace editor {
 		// top of on_update (stopping mid-script would destroy the script pool
 		// while it's being iterated).
 		bool m_QuitToEditorRequested = false;
+
+		// Editor playtest focus. While playing, the game only receives input (and
+		// its cursor lock applies) once the viewport is clicked; Escape hands the
+		// mouse back to the editor so panels can be used without the camera
+		// following. Reset false on Play; the input gate mirrors it.
+		bool m_PlaytestFocused = false;
 
 		// --- Help windows ---
 		bool m_ShowAboutModal = false;

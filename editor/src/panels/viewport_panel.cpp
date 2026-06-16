@@ -64,9 +64,11 @@ namespace editor {
 		}
 
 		// ==========================================
-		// DISABLE EDITOR TOOLS DURING RENDER
+		// EDITOR TOOLS (gizmos + click-picking) — Edit mode only.
+		// Disabled in Render (the path tracer owns the view) and in Play (the
+		// mouse belongs to the game, so a click shouldn't select or drag entities).
 		// ==========================================
-		if (!is_render_mode) {
+		if (!is_render_mode && !is_play_mode) {
 
 			// ==========================================
 			// IMGUIZMO INTEGRATION
@@ -203,24 +205,20 @@ namespace editor {
 					float closest_dist = FLT_MAX;
 					me::entity::entity_id hit_entity = me::entity::null;
 					auto& reg = me::get_registry();
-					auto view_pool = reg.view<me::components::TransformComponent>();
 
-					for (size_t i = 0; i < view_pool.size(); ++i) {
-						auto e = view_pool.entity_map[i];
-						auto* t = reg.try_get_component<me::components::TransformComponent>(e);
-
+					for (auto [e, t] : reg.view<me::components::TransformComponent>()) {
 						bool is_clickable = reg.try_get_component<me::components::Shape3DComponent>(e) ||
 							reg.try_get_component<me::components::Model3DComponent>(e) ||
 							reg.try_get_component<me::components::LightComponent>(e) ||
 							reg.try_get_component<me::components::DirectionalLightComponent>(e) ||
 							reg.try_get_component<me::components::CameraComponent>(e);
 
-						if (t && is_clickable) {
-							Vector3 world_pos = { t->model_matrix.m12, t->model_matrix.m13, t->model_matrix.m14 };
+						if (is_clickable) {
+							Vector3 world_pos = { t.model_matrix.m12, t.model_matrix.m13, t.model_matrix.m14 };
 
-							float world_scale_x = Vector3Length({ t->model_matrix.m0, t->model_matrix.m4, t->model_matrix.m8 });
-							float world_scale_y = Vector3Length({ t->model_matrix.m1, t->model_matrix.m5, t->model_matrix.m9 });
-							float world_scale_z = Vector3Length({ t->model_matrix.m2, t->model_matrix.m6, t->model_matrix.m10 });
+							float world_scale_x = Vector3Length({ t.model_matrix.m0, t.model_matrix.m4, t.model_matrix.m8 });
+							float world_scale_y = Vector3Length({ t.model_matrix.m1, t.model_matrix.m5, t.model_matrix.m9 });
+							float world_scale_z = Vector3Length({ t.model_matrix.m2, t.model_matrix.m6, t.model_matrix.m10 });
 
 							BoundingBox box = {
 								{ world_pos.x - (world_scale_x * 0.75f), world_pos.y - (world_scale_y * 0.75f), world_pos.z - (world_scale_z * 0.75f) },

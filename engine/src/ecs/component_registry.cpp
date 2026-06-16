@@ -251,7 +251,10 @@ namespace me::ecs {
 							{"mass", c.mass},
 							{"bounciness", c.bounciness},
 							{"friction", c.friction},
-							{"is_trigger", c.is_trigger}
+							{"is_trigger", c.is_trigger},
+							{"freeze_rot_x", c.freeze_rot_x},
+							{"freeze_rot_y", c.freeze_rot_y},
+							{"freeze_rot_z", c.freeze_rot_z}
 						};
 					},
 					[](RigidBodyComponent& c, const json& j) {
@@ -260,6 +263,9 @@ namespace me::ecs {
 						c.bounciness = j.value("bounciness", 0.2f);
 						c.friction = j.value("friction", 0.5f);
 						c.is_trigger = j.value("is_trigger", false);
+						c.freeze_rot_x = j.value("freeze_rot_x", false);
+						c.freeze_rot_y = j.value("freeze_rot_y", false);
+						c.freeze_rot_z = j.value("freeze_rot_z", false);
 					},
 					[](Registry& reg, entity::entity_id e) {
 						me::physics::remove_body(reg, e);

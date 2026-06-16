@@ -183,6 +183,16 @@ namespace me::systems {
 		// BVH — rebuilt on reset_accumulation(registry)
 		me::raytracing::BVH m_BVH;
 
+		// --- Real-time rebuild skipping (RT Play) ---
+		// render_realtime_frame rebuilds the BVH + GPU buffers only when the scene
+		// content actually changed since the last build. The hash covers the raw
+		// bytes of every component the flattener/BVH read (transforms, shapes,
+		// models, materials, lights), so any edit forces a rebuild while a
+		// camera-only move (or a paused game) reuses last frame's structures.
+		uint64_t m_LastSceneHash = 0;
+		bool m_RealtimeBuilt = false; // false until the first build after on_start
+		uint64_t scene_content_hash(me::Registry& registry) const;
+
 		// Valid only during on_update — lets trace_ray reach the registry and BVH without passing them through every recursive bounce call.
 		me::Registry* m_ActiveRegistry = nullptr;
 
@@ -211,9 +221,36 @@ namespace me::systems {
 		unsigned int m_ssboDirLights = 0;
 		unsigned int m_ssboEmitters = 0;
 
+		// Allocated byte size of each SSBO. upload_to_gpu updates buffers in place
+		// (rlUpdateShaderBuffer) when the new data fits, and only reallocates when
+		// it must grow — avoiding a VRAM free+alloc for all seven buffers every
+		// frame (which is what RT Play used to do).
+		unsigned int m_capNodes = 0;
+		unsigned int m_capTriangles = 0;
+		unsigned int m_capMaterials = 0;
+		unsigned int m_capPrimitives = 0;
+		unsigned int m_capPointLights = 0;
+		unsigned int m_capDirLights = 0;
+		unsigned int m_capEmitters = 0;
+
 		// --- GPU Compute Variables ---
 		unsigned int m_ComputeShaderProgram = 0;
 		void render_gpu_path(me::Registry& registry, const me::components::CameraComponent& camera, const me::components::TransformComponent& cam_transform);
+
+		// Compute-shader uniform locations, queried once when the program links
+		// (in on_start) instead of every frame — render_gpu_path runs every frame
+		// in RT Play, and a glGetUniformLocation per uniform per frame is pure
+		// overhead since the locations never change.
+		struct GpuUniformLocs {
+			int cam_pos = -1, cam_fwd = -1, cam_up = -1, cam_right = -1, cam_fov_scale = -1;
+			int frame_count = -1, total_frames = -1, max_bounces = -1, row_offset = -1;
+			int num_point_lights = -1, num_dir_lights = -1, num_emitters = -1;
+			int ambient_strength = -1, sky_horizon = -1, sky_zenith = -1, sky_intensity = -1;
+			int exposure = -1, aperture = -1, focus_distance = -1, firefly_clamp = -1;
+			int soft_shadows = -1, enable_reflections = -1, enable_refraction = -1, enable_indirect = -1;
+		};
+		GpuUniformLocs m_Loc{};
+		void cache_gpu_uniform_locations();
 	};
 
 } // namespace me::systems

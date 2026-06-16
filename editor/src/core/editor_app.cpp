@@ -120,6 +120,7 @@ namespace editor {
 				m_CurrentScenePath = e->filepath;
 				m_SceneDirty = false; // freshly loaded == on-disk state
 				load_animation_sidecar();
+				remember_last_scene(); // reopen this scene next time the project loads
 			}
 			});
 		bus.subscribe<me::events::SceneOpenRequestEvent>([this](auto* e) {
@@ -161,6 +162,33 @@ namespace editor {
 			if (m_SceneState == SceneState::Play) on_stop();
 		}
 
+		// During Play, the *game* owns the view + mouse only when the scene has
+		// an active camera. With no scene camera the play view falls back to the
+		// editor fly-cam (see on_render), so that camera must stay drivable.
+		const bool game_owns_view = (m_SceneState == SceneState::Play) && has_active_scene_camera();
+
+		// Playtest focus: click the viewport to hand input + cursor to the game;
+		// press Escape to take them back for the editor. The gate suppresses the
+		// game's input and frees the cursor while unfocused (ImGui/raylib calls
+		// here are editor-level, never gated). Done before poll_shortcuts so the
+		// Escape that unfocuses doesn't also reach anything else.
+		if (game_owns_view) {
+			if (!m_PlaytestFocused) {
+				if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && m_ViewportPanel.is_hovered()) {
+					m_PlaytestFocused = true;
+					me::input::set_input_gate(true); // game gets input; its lock intent applies
+				}
+			} else if (IsKeyPressed(KEY_ESCAPE)) {
+				m_PlaytestFocused = false;
+				me::input::set_input_gate(false); // free the mouse for the editor
+			}
+		} else if (m_SceneState == SceneState::Play) {
+			// Play with no scene camera: the editor fly-cam is the view, so keep
+			// input flowing to it (gate open) and skip the focus handover.
+			m_PlaytestFocused = false;
+			if (!me::input::is_input_gate_open()) me::input::set_input_gate(true);
+		}
+
 		if (m_FlySpeedToastTimer > 0.0f) m_FlySpeedToastTimer -= dt;
 
 		// Animation preview playback (moves the editor camera along the track).
@@ -188,30 +216,36 @@ namespace editor {
 			UnloadDroppedFiles(dropped_files);
 		}
 
-		// Editor Camera Flying
-		if (m_ViewportPanel.is_hovered() && me::input::action_pressed("MouseRight")) {
-			m_IsFlying = true;
-			me::input::lock_cursor();
-		}
-
-		if (m_IsFlying) {
-			// Scroll while flying tunes the base fly speed (Shift/Ctrl in the
-			// camera system give a temporary sprint/precision modifier on top).
-			float wheel = GetMouseWheelMove();
-			if (wheel != 0.0f) {
-				m_EditorCamera.move_speed = std::clamp(m_EditorCamera.move_speed * (1.0f + 0.15f * wheel), 0.5f, 100.0f);
-				m_FlySpeedToastTimer = 1.25f; // show the new speed briefly
+		// Editor Camera Flying. Runs whenever the editor fly-cam owns the view:
+		// always in Edit/Render, and in Play only when the scene has no active
+		// camera (game_owns_view is false). When the game owns the view its scene
+		// camera is in charge and the mouse belongs to the game, so the RMB-to-fly
+		// grab must not run here or right-clicking would steal/release the cursor.
+		if (!game_owns_view) {
+			if (m_ViewportPanel.is_hovered() && me::input::action_pressed("MouseRight")) {
+				m_IsFlying = true;
+				me::input::lock_cursor();
 			}
 
-			bool orbiting = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
-			if (orbiting)
-				me::camera::orbit_editor_camera(m_EditorCameraTransform, m_EditorCamera, m_OrbitTarget, dt);
-			else
-				me::camera::update_editor_camera(m_EditorCameraTransform, m_EditorCamera, dt);
+			if (m_IsFlying) {
+				// Scroll while flying tunes the base fly speed (Shift/Ctrl in the
+				// camera system give a temporary sprint/precision modifier on top).
+				float wheel = GetMouseWheelMove();
+				if (wheel != 0.0f) {
+					m_EditorCamera.move_speed = std::clamp(m_EditorCamera.move_speed * (1.0f + 0.15f * wheel), 0.5f, 100.0f);
+					m_FlySpeedToastTimer = 1.25f; // show the new speed briefly
+				}
 
-			if (me::input::action_released("MouseRight")) {
-				m_IsFlying = false;
-				me::input::unlock_cursor();
+				bool orbiting = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
+				if (orbiting)
+					me::camera::orbit_editor_camera(m_EditorCameraTransform, m_EditorCamera, m_OrbitTarget, dt);
+				else
+					me::camera::update_editor_camera(m_EditorCameraTransform, m_EditorCamera, dt);
+
+				if (me::input::action_released("MouseRight")) {
+					m_IsFlying = false;
+					me::input::unlock_cursor();
+				}
 			}
 		}
 
@@ -230,12 +264,11 @@ namespace editor {
 			auto& reg = me::get_registry();
 			const me::components::TransformComponent* view_t = &m_EditorCameraTransform;
 			const me::components::CameraComponent* view_c = &m_EditorCamera;
-			auto& cam_pool = reg.view<me::components::CameraComponent>();
-			for (size_t i = 0; i < cam_pool.size(); ++i) {
-				if (!cam_pool.components[i].active) continue;
-				if (auto* t = reg.try_get_component<me::components::TransformComponent>(cam_pool.entity_map[i])) {
+			for (auto [e, cam] : reg.view<me::components::CameraComponent>()) {
+				if (!cam.active) continue;
+				if (auto* t = reg.try_get_component<me::components::TransformComponent>(e)) {
 					view_t = t;
-					view_c = &cam_pool.components[i];
+					view_c = &cam;
 					break;
 				}
 			}
@@ -270,12 +303,11 @@ namespace editor {
 		const me::components::CameraComponent*    view_c = &m_EditorCamera;
 		if (m_SceneState == SceneState::Play) {
 			auto& reg = me::get_registry();
-			auto& cam_pool = reg.view<me::components::CameraComponent>();
-			for (size_t i = 0; i < cam_pool.size(); ++i) {
-				if (!cam_pool.components[i].active) continue;
-				if (auto* t = reg.try_get_component<me::components::TransformComponent>(cam_pool.entity_map[i])) {
+			for (auto [e, cam] : reg.view<me::components::CameraComponent>()) {
+				if (!cam.active) continue;
+				if (auto* t = reg.try_get_component<me::components::TransformComponent>(e)) {
 					view_t = t;
-					view_c = &cam_pool.components[i];
+					view_c = &cam;
 					break;
 				}
 			}
@@ -295,7 +327,7 @@ namespace editor {
 
 		// --- Pack ECS data into a raw Raylib struct to draw the grid & gizmos ---
 		Camera3D gridCam = { 0 };
-		gridCam.position = { view_t->position.x, view_t->position.y, view_t->position.z };
+		gridCam.position = view_t->world_position();
 		gridCam.target = { view_c->target.x, view_c->target.y, view_c->target.z };
 		gridCam.up = { view_c->up.x, view_c->up.y, view_c->up.z };
 		gridCam.fovy = view_c->fov;
@@ -313,57 +345,45 @@ namespace editor {
 			auto& reg = me::get_registry();
 
 			// 1. Point Light Gizmos (A simple wireframe sphere)
-			auto& light_pool = reg.view<me::components::LightComponent>();
-			for (size_t i = 0; i < light_pool.size(); ++i) {
-				me::entity::entity_id e = light_pool.entity_map[i];
-				if (auto* t = reg.try_get_component<me::components::TransformComponent>(e)) {
-					auto& l = light_pool.components[i];
-					::Color c = { l.color.r, l.color.g, l.color.b, 255 };
-					DrawSphereWires({ t->position.x, t->position.y, t->position.z }, 0.25f, 8, 8, c);
-				}
+			for (auto [e, l, t] : reg.view<me::components::LightComponent, me::components::TransformComponent>()) {
+				(void)e;
+				::Color c = { l.color.r, l.color.g, l.color.b, 255 };
+				DrawSphereWires(t.world_position(), 0.25f, 8, 8, c);
 			}
 
 			// 2. Directional Light Gizmo (A sphere with a directional arrow)
-			auto& dir_pool = reg.view<me::components::DirectionalLightComponent>();
-			for (size_t i = 0; i < dir_pool.size(); ++i) {
-				me::entity::entity_id e = dir_pool.entity_map[i];
-				if (auto* t = reg.try_get_component<me::components::TransformComponent>(e)) {
-					auto& dl = dir_pool.components[i];
-					::Color c = { dl.color.r, dl.color.g, dl.color.b, 255 };
-					Vector3 pos = { t->position.x, t->position.y, t->position.z };
+			for (auto [e, dl, t] : reg.view<me::components::DirectionalLightComponent, me::components::TransformComponent>()) {
+				(void)e;
+				::Color c = { dl.color.r, dl.color.g, dl.color.b, 255 };
+				Vector3 pos = t.world_position();
 
-					// Calculate the exact forward direction based on rotation
-					float pitch = t->rotation.x * DEG2RAD;
-					float yaw = t->rotation.y * DEG2RAD;
-					Vector3 dir = {
-						std::cos(pitch) * std::sin(yaw),
-						-std::sin(pitch),
-						std::cos(pitch) * std::cos(yaw)
-					};
-					dir = Vector3Normalize(dir);
+				// Calculate the exact forward direction based on rotation
+				float pitch = t.rotation.x * DEG2RAD;
+				float yaw = t.rotation.y * DEG2RAD;
+				Vector3 dir = {
+					std::cos(pitch) * std::sin(yaw),
+					-std::sin(pitch),
+					std::cos(pitch) * std::cos(yaw)
+				};
+				dir = Vector3Normalize(dir);
 
-					// Draw the Sun origin and the line pointing out
-					DrawSphereWires(pos, 0.5f, 12, 12, c);
+				// Draw the Sun origin and the line pointing out
+				DrawSphereWires(pos, 0.5f, 12, 12, c);
 
-					Vector3 endPos = { pos.x + dir.x * 3.0f, pos.y + dir.y * 3.0f, pos.z + dir.z * 3.0f };
-					DrawLine3D(pos, endPos, c);
+				Vector3 endPos = { pos.x + dir.x * 3.0f, pos.y + dir.y * 3.0f, pos.z + dir.z * 3.0f };
+				DrawLine3D(pos, endPos, c);
 
-					// Draw a tiny solid sphere at the end to act as an arrowhead
-					DrawSphere(endPos, 0.15f, c);
-				}
+				// Draw a tiny solid sphere at the end to act as an arrowhead
+				DrawSphere(endPos, 0.15f, c);
 			}
 
 			// 3. Camera Gizmos (a wireframe body + the view frustum toward the target)
-			auto& cam_pool = reg.view<me::components::CameraComponent>();
-			for (size_t i = 0; i < cam_pool.size(); ++i) {
-				me::entity::entity_id e = cam_pool.entity_map[i];
-				auto* t = reg.try_get_component<me::components::TransformComponent>(e);
-				if (!t) continue;
-				auto& cam = cam_pool.components[i];
+			for (auto [e, cam, t] : reg.view<me::components::CameraComponent, me::components::TransformComponent>()) {
+				(void)e;
 
 				// The active (rendering) camera draws warm yellow; inactive ones gray.
 				::Color c = cam.active ? ::Color{ 245, 200, 70, 255 } : ::Color{ 150, 150, 150, 255 };
-				Vector3 pos = { t->position.x, t->position.y, t->position.z };
+				Vector3 pos = t.world_position();
 
 				// Camera body
 				DrawCubeWires(pos, 0.45f, 0.35f, 0.6f, c);
@@ -675,6 +695,22 @@ namespace editor {
 		bool wantText = ImGui::GetIO().WantTextInput;
 		me::entity::entity_id selected = m_HierarchyPanel.get_selected_entity();
 
+		// Play / Stop toggle (Ctrl + P) — the ONLY editor shortcut allowed during
+		// Play. Everything below either edits the scene or competes for keys the
+		// running game wants (WASD overlaps the W/S gizmo switches, Delete, etc.),
+		// so while playing the game owns the keyboard and we bail right after
+		// handling stop. A shipped/exported game has no editor shortcuts at all.
+		if (!wantText && !m_IsFlying && ctrl && ImGui::IsKeyPressed(ImGuiKey_P)) {
+			if (m_SceneState == SceneState::Edit) {
+				on_play();
+				me::set_paused(false);
+			} else {
+				on_stop();
+			}
+			return;
+		}
+		if (m_SceneState == SceneState::Play) return;
+
 		// Global shortcuts — always fire (unless typing in a text box or flying,
 		// where Ctrl/Shift are the camera speed modifiers and S flies backward).
 		if (!wantText && !m_IsFlying) {
@@ -690,15 +726,6 @@ namespace editor {
 			// New Scene (Ctrl + N)
 			if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N)) {
 				request_new_scene();
-			}
-
-			// Play / Stop toggle (Ctrl + P)
-			if (ctrl && ImGui::IsKeyPressed(ImGuiKey_P)) {
-				if (m_SceneState == SceneState::Edit) {
-					on_play();
-					me::set_paused(false);
-				} else
-					on_stop();
 			}
 
 			// Undo (Ctrl + Z) / Redo (Ctrl + Shift + Z or Ctrl + Y)
@@ -737,12 +764,13 @@ namespace editor {
 			if (selected != me::entity::null && ImGui::IsKeyPressed(ImGuiKey_F)) {
 				auto* transform = me::get_registry().try_get_component<me::components::TransformComponent>(selected);
 				if (transform) {
-					m_OrbitTarget = { transform->position.x, transform->position.y, transform->position.z };
-					m_EditorCamera.target = { transform->position.x, transform->position.y, transform->position.z };
+					Vector3 wp = transform->world_position();
+					m_OrbitTarget = { wp.x, wp.y, wp.z };
+					m_EditorCamera.target = { wp.x, wp.y, wp.z };
 					float distance = 10.0f;
-					m_EditorCameraTransform.position.x = transform->position.x - std::sin(m_EditorCameraTransform.rotation.y * (PI / 180.0f)) * distance;
-					m_EditorCameraTransform.position.y = transform->position.y + 5.0f;
-					m_EditorCameraTransform.position.z = transform->position.z - std::cos(m_EditorCameraTransform.rotation.y * (PI / 180.0f)) * distance;
+					m_EditorCameraTransform.position.x = wp.x - std::sin(m_EditorCameraTransform.rotation.y * (PI / 180.0f)) * distance;
+					m_EditorCameraTransform.position.y = wp.y + 5.0f;
+					m_EditorCameraTransform.position.z = wp.z - std::cos(m_EditorCameraTransform.rotation.y * (PI / 180.0f)) * distance;
 					m_EditorCameraTransform.rotation.x = -25.0f;
 				}
 			}
@@ -821,16 +849,57 @@ namespace editor {
 		m_ProjectPath = path;
 		m_IsProjectLoaded = true;
 		me::vfs::mount("game", (m_ProjectPath / "assets").string());
-		m_CurrentScenePath = me::vfs::resolve("game://scenes/main.json");
 
 		m_HierarchyPanel.set_context(&me::get_registry());
 		m_BrowserPanel.set_project_path(path);
 
-		if (me::fs::exists("game://scenes/main.json")) me::scene_manager::load("game://scenes/main.json");
-		else { new_scene(); save_scene(); }
+		// Reopen the scene last edited in this project (see resolve_startup_scene).
+		// If the project has no scenes at all, start an untitled one — Ctrl+S then
+		// prompts for a name. Nothing here creates or assumes a "main.json".
+		std::string startup_scene = resolve_startup_scene(path);
+		if (!startup_scene.empty()) {
+			m_CurrentScenePath = startup_scene;
+			me::scene_manager::load(startup_scene); // SceneLoadedEvent does the bookkeeping
+		} else {
+			new_scene();
+			m_CurrentScenePath.clear(); // untitled until the first Save As
+		}
 
 		m_CommandHistory.Clear();
 		m_SceneDirty = false;
+	}
+
+	std::string EditorApp::resolve_startup_scene(const std::filesystem::path& path) {
+		// 1. The scene last edited in this project, if it still exists on disk.
+		if (auto it = m_LastScenes.find(path.generic_string()); it != m_LastScenes.end()) {
+			if (me::fs::exists(it->second)) return it->second;
+		}
+
+		// 2. Otherwise the first real scene in the project's scenes folder
+		//    (alphabetical; skip the play scratch file and ".anim.json" sidecars).
+		std::filesystem::path scenes_dir = path / "assets" / "scenes";
+		std::vector<std::string> names;
+		if (std::filesystem::exists(scenes_dir)) {
+			for (const auto& entry : std::filesystem::directory_iterator(scenes_dir)) {
+				if (!entry.is_regular_file() || entry.path().extension() != ".json") continue;
+				std::string fname = entry.path().filename().string();
+				if (fname == ".temp_play.json") continue;
+				if (fname.size() >= 10 && fname.compare(fname.size() - 10, 10, ".anim.json") == 0) continue;
+				names.push_back(fname);
+			}
+		}
+		std::sort(names.begin(), names.end());
+		if (!names.empty()) return "game://scenes/" + names.front();
+
+		// 3. No scenes — the caller starts a fresh untitled scene.
+		return "";
+	}
+
+	void EditorApp::remember_last_scene() {
+		if (m_ProjectPath.empty() || m_CurrentScenePath.empty()) return;
+		if (m_CurrentScenePath.find(".temp_play.json") != std::string::npos) return;
+		m_LastScenes[m_ProjectPath.generic_string()] = m_CurrentScenePath;
+		save_engine_config();
 	}
 
 	void EditorApp::new_scene() {
@@ -877,10 +946,14 @@ namespace editor {
 		//}
 	}
 
-	void EditorApp::save_scene() {
+	bool EditorApp::save_scene() {
+		// An untitled scene (e.g. a fresh project with no scenes) has no path yet —
+		// route Save to Save As so the user names the file instead of failing.
+		if (m_CurrentScenePath.empty()) { open_save_as_modal(); return false; }
 		me::scene_manager::save(m_CurrentScenePath);
 		save_animation_sidecar();
 		m_SceneDirty = false;
+		return true;
 	}
 
 
@@ -1053,6 +1126,18 @@ namespace editor {
 		}
 	}
 
+	// Mirrors on_render's play-camera pick: an active CameraComponent that also
+	// has a Transform can drive the play view. When none exists, on_render falls
+	// back to the editor fly-cam, so we keep that camera drivable during Play.
+	bool EditorApp::has_active_scene_camera() {
+		auto& reg = me::get_registry();
+		for (auto [e, cam] : reg.view<me::components::CameraComponent>()) {
+			if (cam.active && reg.try_get_component<me::components::TransformComponent>(e))
+				return true;
+		}
+		return false;
+	}
+
 	void EditorApp::on_play() {
 		m_SceneState = SceneState::Play;
 		me::logger::info("Mode set to: PLAYING");
@@ -1072,6 +1157,12 @@ namespace editor {
 			m_Raytracer.on_start(w, h);
 		}
 
+		// Play starts UNfocused: the game receives no input and the cursor stays
+		// free, so you can tweak panels first. Click the viewport to engage.
+		m_PlaytestFocused = false;
+		m_IsFlying = false; // never carry an editor fly-grab into play
+		me::input::set_input_gate(false);
+
 		me::set_playing(true);
 		me::get_event_bus().publish<me::events::PlayStateChangedEvent>(true);
 	}
@@ -1085,6 +1176,12 @@ namespace editor {
 		me::set_playing(false);
 		me::get_event_bus().publish<me::events::PlayStateChangedEvent>(false);
 
+		// Returning to the editor: re-open the input gate (edit-mode camera fly
+		// needs it) and release the cursor a game script may have locked.
+		m_PlaytestFocused = false;
+		me::input::set_input_gate(true);
+		me::input::unlock_cursor();
+
 		// Destroy all live physics bodies
 		me::physics::on_stop();
 
@@ -1097,15 +1194,15 @@ namespace editor {
 		auto& registry = me::get_registry();
 
 		// Stop any looping music streams
-		auto& music_pool = registry.view<me::components::BackgroundMusicComponent>();
-		for (size_t i = 0; i < music_pool.size(); ++i) {
-			me::audio::stop_music(music_pool.components[i].stream);
+		for (auto [e, music] : registry.view<me::components::BackgroundMusicComponent>()) {
+			(void)e;
+			me::audio::stop_music(music.stream);
 		}
 
 		// Stop any long-playing sound effects
-		auto& sfx_pool = registry.view<me::components::AudioSourceComponent>();
-		for (size_t i = 0; i < sfx_pool.size(); ++i) {
-			me::audio::stop(sfx_pool.components[i].clip);
+		for (auto [e, sfx] : registry.view<me::components::AudioSourceComponent>()) {
+			(void)e;
+			me::audio::stop(sfx.clip);
 		}
 
 		me::scene_manager::load("game://scenes/.temp_play.json");
@@ -1192,7 +1289,7 @@ namespace editor {
 		// 4. The game's boot config.
 		nlohmann::json j;
 		j["name"] = name;
-		j["main_scene"] = m_ExportGameScene.empty() ? "game://scenes/main.json" : m_ExportGameScene;
+		j["main_scene"] = m_ExportGameScene.empty() ? m_CurrentScenePath : m_ExportGameScene;
 		j["width"] = std::max(320, m_ExportGameW);
 		j["height"] = std::max(240, m_ExportGameH);
 		j["vsync"] = m_ExportGameVsync;
@@ -1256,6 +1353,10 @@ namespace editor {
 					for (const auto& path : j["recent_projects"]) m_RecentProjects.push_back(path.get<std::string>());
 					m_HubPanel.set_recent_projects(m_RecentProjects); // Pass to hub!
 				}
+				if (j.contains("last_scenes")) {
+					for (auto& [project, scene] : j["last_scenes"].items())
+						m_LastScenes[project] = scene.get<std::string>();
+				}
 				if (j.contains("ui_scale")) ImGui::GetIO().FontGlobalScale = j["ui_scale"].get<float>();
 				if (j.contains("auto_mode_layouts")) m_AutoModeLayouts = j["auto_mode_layouts"].get<bool>();
 
@@ -1276,6 +1377,7 @@ namespace editor {
 	void EditorApp::save_engine_config() {
 		nlohmann::json j;
 		j["recent_projects"] = m_RecentProjects;
+		j["last_scenes"] = m_LastScenes;
 		j["ui_scale"] = ImGui::GetIO().FontGlobalScale;
 		j["auto_mode_layouts"] = m_AutoModeLayouts;
 
@@ -1341,8 +1443,9 @@ namespace editor {
 					m_ShowExportGameModal = true;
 					snprintf(m_ExportGameName, sizeof(m_ExportGameName), "%s", m_ProjectPath.filename().string().c_str());
 					snprintf(m_ExportGameDir, sizeof(m_ExportGameDir), "%s", (m_ProjectPath / "export").string().c_str());
-					m_ExportGameScene = me::fs::exists("game://scenes/main.json")
-						? "game://scenes/main.json" : m_CurrentScenePath;
+					// Default the game's boot scene to the one currently open; the
+					// export modal lets the user pick a different one.
+					m_ExportGameScene = m_CurrentScenePath;
 				}
 
 				ImGui::Separator();
@@ -1595,7 +1698,11 @@ namespace editor {
 		// Mode badge (right-aligned): mirrors the viewport frame color.
 		const char* mode_label = "EDIT";
 		ImVec4 mode_col = ImVec4(0.62f, 0.62f, 0.62f, 1.0f);
-		if (m_SceneState == SceneState::Play) { mode_label = "PLAYING";   mode_col = ImVec4(0.35f, 0.8f, 0.45f, 1.0f); }
+		if (m_SceneState == SceneState::Play) {
+			// Tell the user how to hand input to the game vs. back to the editor.
+			mode_label = m_PlaytestFocused ? "PLAYING  (Esc to release)" : "PLAYING  (click viewport)";
+			mode_col = ImVec4(0.35f, 0.8f, 0.45f, 1.0f);
+		}
 		if (m_SceneState == SceneState::Render) { mode_label = "RENDERING"; mode_col = ImVec4(0.72f, 0.45f, 0.95f, 1.0f); }
 		ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::CalcTextSize(mode_label).x - 14.0f);
 		ImGui::TextColored(mode_col, "%s", mode_label);
@@ -1629,7 +1736,9 @@ namespace editor {
 			ImGui::SetNextWindowBgAlpha(0.55f);
 			if (ImGui::Begin("##StatsOverlay", nullptr, overlay_flags)) {
 				ImGui::Text("FPS: %d (%.2f ms)", GetFPS(), GetFrameTime() * 1000.0f);
-				ImGui::Text("Entities: %d", (int)me::get_registry().view<me::components::TransformComponent>().size());
+				int entity_count = 0;
+				for (auto e : me::get_registry().view<me::components::TransformComponent>()) { (void)e; ++entity_count; }
+				ImGui::Text("Entities: %d", entity_count);
 				if (m_SceneState == SceneState::Render) {
 					ImGui::Separator();
 					ImGui::Text("Raytracer: %dx%d (%s)",
@@ -1661,6 +1770,7 @@ namespace editor {
 				m_CurrentScenePath = "game://scenes/" + filename;
 				new_scene();
 				save_scene();
+				remember_last_scene();
 				m_ShowNewSceneModal = false;
 				ImGui::CloseCurrentPopup();
 			}
@@ -1683,12 +1793,21 @@ namespace editor {
 				if (filename.find(".json") == std::string::npos) filename += ".json";
 				m_CurrentScenePath = "game://scenes/" + filename;
 				save_scene();
+				remember_last_scene();
 				me::logger::info("Saved scene as " + m_CurrentScenePath);
 				m_ShowSaveAsModal = false;
 				ImGui::CloseCurrentPopup();
+				// If this Save As was the "Save" answer to an unsaved-changes prompt,
+				// the queued action (exit / new / open) was waiting for a name.
+				if (m_PendingAction != PendingAction::None) perform_pending_action();
 			}
 			ImGui::SameLine();
-			if (ImGui::Button("Cancel", ImVec2(120, 0))) { m_ShowSaveAsModal = false; ImGui::CloseCurrentPopup(); }
+			if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+				// Cancelling Save As also cancels any action that was waiting on it.
+				m_PendingAction = PendingAction::None;
+				m_ShowSaveAsModal = false;
+				ImGui::CloseCurrentPopup();
+			}
 			ImGui::EndPopup();
 		}
 
@@ -1811,10 +1930,12 @@ namespace editor {
 			ImGui::Dummy(ImVec2(0, 10));
 
 			if (ImGui::Button("Save", ImVec2(110, 0))) {
-				save_scene();
+				bool saved = save_scene();
 				m_ShowUnsavedModal = false;
 				ImGui::CloseCurrentPopup();
-				perform_pending_action();
+				// If the scene was untitled, save_scene() opened Save As instead;
+				// the parked action runs once a name is chosen (see Save As modal).
+				if (saved) perform_pending_action();
 			}
 			ImGui::SameLine();
 			if (ImGui::Button("Don't Save", ImVec2(110, 0))) {

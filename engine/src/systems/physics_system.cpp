@@ -31,6 +31,7 @@
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/AllowedDOFs.h>
 
 JPH_SUPPRESS_WARNINGS
 
@@ -295,6 +296,14 @@ namespace me::physics {
 		body_settings.mRestitution = rb.bounciness;
 		body_settings.mFriction = rb.friction;
 		body_settings.mIsSensor = rb.is_trigger;
+
+		// Lock requested rotation axes (e.g. an upright character that must not tip
+		// over). Start from all six DOFs and clear the frozen rotation bits.
+		uint8_t dofs = static_cast<uint8_t>(JPH::EAllowedDOFs::All);
+		if (rb.freeze_rot_x) dofs &= ~static_cast<uint8_t>(JPH::EAllowedDOFs::RotationX);
+		if (rb.freeze_rot_y) dofs &= ~static_cast<uint8_t>(JPH::EAllowedDOFs::RotationY);
+		if (rb.freeze_rot_z) dofs &= ~static_cast<uint8_t>(JPH::EAllowedDOFs::RotationZ);
+		body_settings.mAllowedDOFs = static_cast<JPH::EAllowedDOFs>(dofs);
 		// The contact listener and raycasts read the entity id back out of here.
 		body_settings.mUserData = static_cast<JPH::uint64>(e);
 		// Jolt reports OnContactRemoved when an island falls asleep (~0.5 s of
@@ -337,9 +346,8 @@ namespace me::physics {
 		s_ContactCollector = new ContactEventCollector();
 		s_PhysicsSystem->SetContactListener(s_ContactCollector);
 
-		auto& rb_pool = registry.view<me::components::RigidBodyComponent>();
-		for (size_t i = 0; i < rb_pool.size(); ++i)
-			create_body(registry, rb_pool.entity_map[i], rb_pool.components[i]);
+		for (auto [e, rb] : registry.view<me::components::RigidBodyComponent>())
+			create_body(registry, e, rb);
 
 		s_PhysicsSystem->OptimizeBroadPhase();
 	}
@@ -397,46 +405,34 @@ namespace me::physics {
 		s_PhysicsSystem->Update(dt, collision_steps, s_TempAllocator, s_JobSystem);
 
 		JPH::BodyInterface& body_interface = s_PhysicsSystem->GetBodyInterface();
-		auto& rb_pool = registry.view<me::components::RigidBodyComponent>();
 
-		for (size_t i = 0; i < rb_pool.size(); ++i) {
-			auto e = rb_pool.entity_map[i];
-			auto& rb = rb_pool.components[i];
-
+		for (auto [e, rb, transform] : registry.view<me::components::RigidBodyComponent, me::components::TransformComponent>()) {
+			(void)e;
 			if (rb.type != me::components::RigidBodyType::Static && rb.runtime_body_id != 0xFFFFFFFF) {
-				auto* transform = registry.try_get_component<me::components::TransformComponent>(e);
-				if (transform) {
-					JPH::BodyID id(rb.runtime_body_id);
+				JPH::BodyID id(rb.runtime_body_id);
 
-					if (!body_interface.IsAdded(id)) continue;
+				if (!body_interface.IsAdded(id)) continue;
 
-					JPH::RVec3 pos = body_interface.GetPosition(id);
-					JPH::Quat rot = body_interface.GetRotation(id);
+				JPH::RVec3 pos = body_interface.GetPosition(id);
+				JPH::Quat rot = body_interface.GetRotation(id);
 
-					transform->position = { pos.GetX(), pos.GetY(), pos.GetZ() };
+				transform.position = { pos.GetX(), pos.GetY(), pos.GetZ() };
 
-					Quaternion ray_quat = { rot.GetX(), rot.GetY(), rot.GetZ(), rot.GetW() };
-					Vector3 euler = QuaternionToEuler(ray_quat);
-					transform->rotation = { euler.x * RAD2DEG, euler.y * RAD2DEG, euler.z * RAD2DEG };
+				Quaternion ray_quat = { rot.GetX(), rot.GetY(), rot.GetZ(), rot.GetW() };
+				Vector3 euler = QuaternionToEuler(ray_quat);
+				transform.rotation = { euler.x * RAD2DEG, euler.y * RAD2DEG, euler.z * RAD2DEG };
 
-					transform->is_dirty = true;
-				}
+				transform.is_dirty = true;
 			}
 		}
 	}
 
 	void draw_debug(me::Registry& registry) {
-		auto& rb_pool = registry.view<me::components::RigidBodyComponent>();
-
-		for (size_t i = 0; i < rb_pool.size(); ++i) {
-			auto e = rb_pool.entity_map[i];
-			auto& rb = rb_pool.components[i];
-			auto* transform = registry.try_get_component<me::components::TransformComponent>(e);
-
+		for (auto [e, rb, transform] : registry.view<me::components::RigidBodyComponent, me::components::TransformComponent>()) {
 			auto* box_col = registry.try_get_component<me::components::BoxColliderComponent>(e);
 			auto* sphere_col = registry.try_get_component<me::components::SphereColliderComponent>(e);
 
-			if (transform && (box_col || sphere_col)) {
+			if (box_col || sphere_col) {
 				::Color wire_color = { 0, 228, 48, 255 }; // Green (Dynamic)
 
 				if (rb.type == me::components::RigidBodyType::Static)
@@ -448,7 +444,7 @@ namespace me::physics {
 				rlPushMatrix();
 
 				// Inject entity's transform matrix directly into the GPU
-				Matrix glMatrix = MatrixTranspose(transform->model_matrix);
+				Matrix glMatrix = MatrixTranspose(transform.model_matrix);
 				rlMultMatrixf((float*)&glMatrix);
 
 				if (box_col && box_col->show_debug) {
