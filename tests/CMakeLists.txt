@@ -16,6 +16,18 @@ target_link_libraries(animation_eval_test PRIVATE engine raylib Jolt)
 
 add_test(NAME animation_eval COMMAND animation_eval_test)
 
+# Headless gameplay-Lua-API tests (Vector3/Color maths, sandbox, Entity bindings).
+add_executable(lua_api_test lua_api.cpp)
+target_link_libraries(lua_api_test PRIVATE engine raylib Jolt)
+
+add_test(NAME lua_api COMMAND lua_api_test)
+
+# Headless collision-event + raycast tests (Jolt world, no window needed).
+add_executable(physics_events_test physics_events.cpp)
+target_link_libraries(physics_events_test PRIVATE engine raylib Jolt)
+
+add_test(NAME physics_events COMMAND physics_events_test)
+
 # Dev tool: compiles the raytracer compute shader to validate GLSL edits. Opens a
 # brief GL window (compute needs a 4.3 context), so it's not registered with CTest.
 add_executable(shader_check shader_check.cpp)

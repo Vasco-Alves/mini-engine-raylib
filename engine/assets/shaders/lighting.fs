@@ -35,6 +35,15 @@ uniform vec3  dirLightColor;
 uniform float dirLightIntensity;
 uniform int   hasDirLight;
 
+// ── Directional-light shadow map ────────────────────────────────────────────
+// Rendered by me::render::render_shadows() before the main pass. When the
+// front-end never runs the pass, shadowsEnabled stays 0 (GL zero-initializes
+// uniforms) and lighting falls back to the unshadowed result.
+uniform sampler2D shadowMap;
+uniform mat4      lightVP;             // world -> light clip space
+uniform int       shadowsEnabled;
+uniform int       shadowMapResolution;
+
 // ============================================================
 //  PBR HELPERS  (Cook-Torrance BRDF)
 // ============================================================
@@ -89,6 +98,36 @@ vec3 cook_torrance(vec3 N, vec3 V, vec3 L,
     vec3  kD   = (vec3(1.0) - F) * (1.0 - metallic);
 
     return (kD * baseColor / PI + spec) * NdotL;
+}
+
+// ============================================================
+//  DIRECTIONAL SHADOW  — 3x3 PCF against the sun's depth map
+// ============================================================
+// Returns how lit the fragment is: 1.0 = fully lit, 0.0 = fully shadowed.
+// Fragments outside the shadow volume count as lit (the map follows the
+// camera; the world beyond its extent simply gets no shadows).
+float dir_light_shadow(vec3 N, vec3 L) {
+    if (shadowsEnabled == 0) return 1.0;
+
+    vec4 ls = lightVP * vec4(fragPosition, 1.0);
+    vec3 p  = ls.xyz / ls.w;
+    p = p * 0.5 + 0.5;                 // NDC -> [0,1] texture/depth space
+    if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0)
+        return 1.0;
+
+    // Slope-scaled bias: surfaces nearly parallel to the light need more
+    // tolerance against acne; surfaces facing it need almost none.
+    float bias = max(0.0020 * (1.0 - max(dot(N, L), 0.0)), 0.0004);
+
+    vec2  texel = vec2(1.0 / float(shadowMapResolution));
+    float lit   = 0.0;
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            float mapDepth = texture(shadowMap, p.xy + vec2(float(x), float(y)) * texel).r;
+            lit += (p.z - bias <= mapDepth) ? 1.0 : 0.0;
+        }
+    }
+    return lit / 9.0;
 }
 
 // ============================================================
@@ -160,11 +199,11 @@ void main() {
         Lo += cook_torrance(N, V, L, baseColor, r, metallic, F0) * radiance;
     }
 
-    // ── Directional light ───────────────────────────────────
+    // ── Directional light (the only shadow caster) ──────────
     if (hasDirLight == 1) {
         vec3 L        = normalize(-dirLightDir);
         vec3 radiance = dirLightColor * dirLightIntensity;
-        Lo += cook_torrance(N, V, L, baseColor, r, metallic, F0) * radiance;
+        Lo += cook_torrance(N, V, L, baseColor, r, metallic, F0) * radiance * dir_light_shadow(N, L);
     }
 
     // ── Sky-based ambient (IBL approximation) ───────────────

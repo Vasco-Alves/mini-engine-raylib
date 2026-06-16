@@ -268,6 +268,27 @@ namespace editor {
 
 			ImGui::DragFloat("Angular Radius (deg)", &light->angular_radius, fine(0.05f), 0.0f, 30.0f);
 			track_edit(entity, light, command_history);
+
+			ImGui::Checkbox("Cast Shadows", &light->cast_shadows);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Real-time shadow map in the viewport and exported games.\nThe path tracer computes its own shadows regardless.");
+			track_edit(entity, light, command_history);
+
+			if (light->cast_shadows) {
+				ImGui::DragFloat("Shadow Extent", &light->shadow_extent, fine(1.0f), 5.0f, 500.0f);
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("World-unit width of the shadowed area around the camera.\nSmaller = sharper shadows that end closer; larger = softer but reach further.");
+				track_edit(entity, light, command_history);
+
+				const char* resolutions[] = { "512", "1024", "2048", "4096" };
+				const int res_values[] = { 512, 1024, 2048, 4096 };
+				int res_index = 2; // default 2048
+				for (int i = 0; i < 4; i++)
+					if (light->shadow_resolution == res_values[i]) { res_index = i; break; }
+				if (ImGui::Combo("Shadow Resolution", &res_index, resolutions, 4))
+					light->shadow_resolution = res_values[res_index];
+				track_edit(entity, light, command_history);
+			}
 		}
 
 		void draw_camera(me::Entity entity, editor::CommandHistory& command_history) {
@@ -321,6 +342,22 @@ namespace editor {
 
 			ImGui::DragFloat("Friction", &rb->friction, fine(0.05f), 0.0f, 10.0f);
 			track_edit(entity, rb, command_history);
+
+			ImGui::Checkbox("Is Trigger (sensor)", &rb->is_trigger);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Overlaps fire script collision callbacks but don't physically collide\n(pickups, damage zones, level exits).");
+			track_edit(entity, rb, command_history);
+
+			// Per-axis rotation lock. For an upright character, freeze X and Z so it can't tip over while walking.
+			ImGui::Text("Freeze Rotation");
+			ImGui::SameLine();
+			bool froze = false;
+			froze |= ImGui::Checkbox("X", &rb->freeze_rot_x); ImGui::SameLine();
+			froze |= ImGui::Checkbox("Y", &rb->freeze_rot_y); ImGui::SameLine();
+			froze |= ImGui::Checkbox("Z", &rb->freeze_rot_z);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("Locks rotation about each world axis (Dynamic bodies).\nFreeze X+Z to keep a character upright while it walks.");
+			if (froze) track_edit(entity, rb, command_history);
 		}
 
 		void draw_box_collider(me::Entity entity, editor::CommandHistory& command_history) {

@@ -19,7 +19,14 @@ namespace me {
 	namespace scene_manager {
 
 		void clear() {
-			me::get_registry().clear();
+			// Same rule as load(): the outgoing entities must release their
+			// ref-counted asset/audio handles before the pools are wiped.
+			auto& reg = me::get_registry();
+			for (auto [e, t] : reg.view<me::components::TransformComponent>()) {
+				(void)t;
+				me::ecs::release_native_handles(reg, e);
+			}
+			reg.clear();
 		}
 
 		// =====================================================================
@@ -36,9 +43,8 @@ namespace me {
 
 			// Every persisted entity carries a Transform, so the transform pool is
 			// our entity enumeration. Each present component is written by the registry.
-			auto& transforms = reg.view<me::components::TransformComponent>();
-			for (size_t i = 0; i < transforms.size(); ++i) {
-				me::entity::entity_id e = transforms.entity_map[i];
+			for (auto [e, t] : reg.view<me::components::TransformComponent>()) {
+				(void)t;
 				if (!reg.is_alive(e)) continue;
 
 				json je;
@@ -94,6 +100,16 @@ namespace me {
 			if (version > kSceneFormatVersion) {
 				me::logger::warn("Scene was saved by a newer engine (format " + std::to_string(version)
 					+ ", this build reads " + std::to_string(kSceneFormatVersion) + ") - loading anyway.");
+			}
+
+			// The asset/audio caches are ref-counted and clear() doesn't run the
+			// deletion pipeline, so the outgoing scene must release its native
+			// handles here — otherwise every scene switch pins the old scene's
+			// models/sounds in memory for the rest of the session. The transform
+			// pool enumerates every persisted entity (same convention as save()).
+			for (auto [e, t] : reg.view<me::components::TransformComponent>()) {
+				(void)t;
+				me::ecs::release_native_handles(reg, e);
 			}
 
 			reg.clear();
@@ -186,6 +202,32 @@ namespace me {
 		// =====================================================================
 		bool save(const std::string& filepath) { return save(me::get_registry(), filepath); }
 		bool load(const std::string& filepath) { return load(me::get_registry(), filepath); }
+
+		// =====================================================================
+		// DEFERRED SCENE SWITCHING (applied by the engine loop at end of frame)
+		// =====================================================================
+		namespace {
+			std::string s_pending_load;
+		}
+
+		void request_load(const std::string& filepath) {
+			if (!s_pending_load.empty() && s_pending_load != filepath)
+				me::logger::warn("Scene.load: replacing pending request '" + s_pending_load + "' with '" + filepath + "'");
+			s_pending_load = filepath;
+		}
+
+		bool has_pending_load() {
+			return !s_pending_load.empty();
+		}
+
+		bool apply_pending_load() {
+			std::string path;
+			std::swap(path, s_pending_load);
+			if (path.empty()) return false;
+
+			me::logger::info("Switching scene to: " + path);
+			return load(path);
+		}
 
 	} // namespace scene_manager
 } // namespace me

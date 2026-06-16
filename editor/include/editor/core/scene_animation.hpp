@@ -340,12 +340,11 @@ namespace editor {
 		// Re-binds tracks to live entities by Tag name (ids change every scene
 		// load). Unresolved tracks are kept but inert, with a console warning.
 		void resolve_entities(me::Registry& reg) {
-			auto& tags = reg.view<me::components::TagComponent>();
 			for (auto& tr : entity_tracks) {
 				tr.entity = me::entity::null;
-				for (size_t i = 0; i < tags.size(); ++i) {
-					if (tags.components[i].name == tr.entity_name && reg.is_alive(tags.entity_map[i])) {
-						tr.entity = tags.entity_map[i];
+				for (auto [e, tag] : reg.view<me::components::TagComponent>()) {
+					if (tag.name == tr.entity_name && reg.is_alive(e)) {
+						tr.entity = e;
 						break;
 					}
 				}

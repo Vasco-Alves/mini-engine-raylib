@@ -8,6 +8,7 @@
 #include "mini-engine-raylib/ecs/script_component.hpp"
 #include "mini-engine-raylib/audio/audio.hpp"
 #include "mini-engine-raylib/assets/assets.hpp"
+#include "mini-engine-raylib/systems/physics_system.hpp"
 #include "../assets/assets_internal.hpp"
 
 #include <cstdint>
@@ -105,21 +106,34 @@ namespace me::ecs {
 				}));
 
 			// Model3D — owns a cached model handle.
-			r.push_back(meta<Model3DComponent>("Model",
-				[](const Model3DComponent& c) {
-					const char* path = me::assets::internal_get_model_path(c.model);
-					json j; j["path"] = path ? path : "";
-					write_color(j, c.tint);
-					return j;
-				},
-				[](Model3DComponent& c, const json& j) {
-					std::string path = j.value("path", "");
-					if (!path.empty()) c.model = me::assets::load_model(path.c_str());
-					c.tint = read_color(j);
-				},
-				[](Registry& reg, entity::entity_id e) {
-					if (auto* c = reg.try_get_component<Model3DComponent>(e)) me::assets::release(c->model);
-				}));
+			{
+				auto m = meta<Model3DComponent>("Model",
+					[](const Model3DComponent& c) {
+						const char* path = me::assets::internal_get_model_path(c.model);
+						json j; j["path"] = path ? path : "";
+						write_color(j, c.tint);
+						return j;
+					},
+					[](Model3DComponent& c, const json& j) {
+						std::string path = j.value("path", "");
+						if (!path.empty()) c.model = me::assets::load_model(path.c_str());
+						c.tint = read_color(j);
+					},
+					[](Registry& reg, entity::entity_id e) {
+						if (auto* c = reg.try_get_component<Model3DComponent>(e)) me::assets::release(c->model);
+					});
+				// The model cache is ref-counted: the clone must acquire its own
+				// reference — a raw handle copy gets released twice on destroy.
+				m.clone = [](Registry& reg, entity::entity_id s, entity::entity_id d) {
+					if (auto* c = reg.try_get_component<Model3DComponent>(s)) {
+						Model3DComponent copy = *c;
+						if (const char* path = me::assets::internal_get_model_path(c->model))
+							copy.model = me::assets::load_model(path);
+						reg.add_component<Model3DComponent>(d, copy);
+					}
+				};
+				r.push_back(std::move(m));
+			}
 
 			// Material
 			r.push_back(meta<MaterialComponent>("Material",
@@ -190,12 +204,21 @@ namespace me::ecs {
 			// Directional Light
 			r.push_back(meta<DirectionalLightComponent>("DirectionalLight",
 				[](const DirectionalLightComponent& c) {
-					json j; write_color(j, c.color); j["intensity"] = c.intensity; j["angular_radius"] = c.angular_radius; return j;
+					json j; write_color(j, c.color);
+					j["intensity"] = c.intensity;
+					j["angular_radius"] = c.angular_radius;
+					j["cast_shadows"] = c.cast_shadows;
+					j["shadow_extent"] = c.shadow_extent;
+					j["shadow_resolution"] = c.shadow_resolution;
+					return j;
 				},
 				[](DirectionalLightComponent& c, const json& j) {
 					c.color = read_color(j);
 					c.intensity = j.value("intensity", 1.0f);
 					c.angular_radius = j.value("angular_radius", 1.0f);
+					c.cast_shadows = j.value("cast_shadows", true);
+					c.shadow_extent = j.value("shadow_extent", 60.0f);
+					c.shadow_resolution = j.value("shadow_resolution", 2048);
 				}));
 
 			// Camera3D
@@ -217,22 +240,47 @@ namespace me::ecs {
 					c.projection = j.value("projection", 0);
 				}));
 
-			// RigidBody
-			r.push_back(meta<RigidBodyComponent>("RigidBody",
-				[](const RigidBodyComponent& c) {
-					return json{
-						{"type", static_cast<int>(c.type)},
-						{"mass", c.mass},
-						{"bounciness", c.bounciness},
-						{"friction", c.friction}
-					};
-				},
-				[](RigidBodyComponent& c, const json& j) {
-					c.type = static_cast<RigidBodyType>(j.value("type", 1));
-					c.mass = j.value("mass", 1.0f);
-					c.bounciness = j.value("bounciness", 0.2f);
-					c.friction = j.value("friction", 0.5f);
-				}));
+			// RigidBody — owns a live Jolt body while the simulation runs; destroying
+			// the entity (or removing the component) mid-play must remove the body,
+			// or an invisible collider keeps blocking the world.
+			{
+				auto m = meta<RigidBodyComponent>("RigidBody",
+					[](const RigidBodyComponent& c) {
+						return json{
+							{"type", static_cast<int>(c.type)},
+							{"mass", c.mass},
+							{"bounciness", c.bounciness},
+							{"friction", c.friction},
+							{"is_trigger", c.is_trigger},
+							{"freeze_rot_x", c.freeze_rot_x},
+							{"freeze_rot_y", c.freeze_rot_y},
+							{"freeze_rot_z", c.freeze_rot_z}
+						};
+					},
+					[](RigidBodyComponent& c, const json& j) {
+						c.type = static_cast<RigidBodyType>(j.value("type", 1));
+						c.mass = j.value("mass", 1.0f);
+						c.bounciness = j.value("bounciness", 0.2f);
+						c.friction = j.value("friction", 0.5f);
+						c.is_trigger = j.value("is_trigger", false);
+						c.freeze_rot_x = j.value("freeze_rot_x", false);
+						c.freeze_rot_y = j.value("freeze_rot_y", false);
+						c.freeze_rot_z = j.value("freeze_rot_z", false);
+					},
+					[](Registry& reg, entity::entity_id e) {
+						me::physics::remove_body(reg, e);
+					});
+				// The clone must get its own Jolt body — a copied body id would have
+				// two entities fighting over (and double-destroying) one body.
+				m.clone = [](Registry& reg, entity::entity_id s, entity::entity_id d) {
+					if (auto* c = reg.try_get_component<RigidBodyComponent>(s)) {
+						RigidBodyComponent copy = *c;
+						copy.runtime_body_id = 0xFFFFFFFF;
+						reg.add_component<RigidBodyComponent>(d, copy);
+					}
+				};
+				r.push_back(std::move(m));
+			}
 
 			// BoxCollider
 			r.push_back(meta<BoxColliderComponent>("BoxCollider",
@@ -263,50 +311,77 @@ namespace me::ecs {
 				[](AudioListenerComponent& c, const json& j) { c.active = j.value("active", true); }));
 
 			// AudioSource — owns a cached sound handle.
-			r.push_back(meta<AudioSourceComponent>("AudioSource",
-				[](const AudioSourceComponent& c) {
-					return json{
-						{"filepath", c.filepath},
-						{"volume", c.volume},
-						{"pitch", c.pitch},
-						{"play_on_awake", c.play_on_awake},
-						{"spatial", c.spatial},
-						{"max_distance", c.max_distance}
-					};
-				},
-				[](AudioSourceComponent& c, const json& j) {
-					c.filepath = j.value("filepath", "");
-					c.volume = j.value("volume", 1.0f);
-					c.pitch = j.value("pitch", 1.0f);
-					c.play_on_awake = j.value("play_on_awake", false);
-					c.spatial = j.value("spatial", true);
-					c.max_distance = j.value("max_distance", 50.0f);
-					if (!c.filepath.empty()) c.clip = me::audio::load(c.filepath.c_str());
-				},
-				[](Registry& reg, entity::entity_id e) {
-					if (auto* c = reg.try_get_component<AudioSourceComponent>(e)) me::audio::release(c->clip);
-				}));
+			{
+				auto m = meta<AudioSourceComponent>("AudioSource",
+					[](const AudioSourceComponent& c) {
+						return json{
+							{"filepath", c.filepath},
+							{"volume", c.volume},
+							{"pitch", c.pitch},
+							{"play_on_awake", c.play_on_awake},
+							{"spatial", c.spatial},
+							{"max_distance", c.max_distance}
+						};
+					},
+					[](AudioSourceComponent& c, const json& j) {
+						c.filepath = j.value("filepath", "");
+						c.volume = j.value("volume", 1.0f);
+						c.pitch = j.value("pitch", 1.0f);
+						c.play_on_awake = j.value("play_on_awake", false);
+						c.spatial = j.value("spatial", true);
+						c.max_distance = j.value("max_distance", 50.0f);
+						if (!c.filepath.empty()) c.clip = me::audio::load(c.filepath.c_str());
+					},
+					[](Registry& reg, entity::entity_id e) {
+						if (auto* c = reg.try_get_component<AudioSourceComponent>(e)) me::audio::release(c->clip);
+					});
+				// Ref-counted handle: the clone acquires its own reference, and starts
+				// with fresh runtime state so a spawned copy fires play_on_awake again.
+				m.clone = [](Registry& reg, entity::entity_id s, entity::entity_id d) {
+					if (auto* c = reg.try_get_component<AudioSourceComponent>(s)) {
+						AudioSourceComponent copy = *c;
+						if (!copy.filepath.empty()) copy.clip = me::audio::load(copy.filepath.c_str());
+						copy.has_played_awake = false;
+						copy.trigger_play = false;
+						reg.add_component<AudioSourceComponent>(d, copy);
+					}
+				};
+				r.push_back(std::move(m));
+			}
 
 			// BackgroundMusic — owns a cached music-stream handle.
-			r.push_back(meta<BackgroundMusicComponent>("BackgroundMusic",
-				[](const BackgroundMusicComponent& c) {
-					return json{
-						{"filepath", c.filepath},
-						{"volume", c.volume},
-						{"loop", c.loop},
-						{"play_on_awake", c.play_on_awake}
-					};
-				},
-				[](BackgroundMusicComponent& c, const json& j) {
-					c.filepath = j.value("filepath", "");
-					c.volume = j.value("volume", 1.0f);
-					c.loop = j.value("loop", true);
-					c.play_on_awake = j.value("play_on_awake", false);
-					if (!c.filepath.empty()) c.stream = me::audio::load_music(c.filepath.c_str());
-				},
-				[](Registry& reg, entity::entity_id e) {
-					if (auto* c = reg.try_get_component<BackgroundMusicComponent>(e)) me::audio::release(c->stream);
-				}));
+			{
+				auto m = meta<BackgroundMusicComponent>("BackgroundMusic",
+					[](const BackgroundMusicComponent& c) {
+						return json{
+							{"filepath", c.filepath},
+							{"volume", c.volume},
+							{"loop", c.loop},
+							{"play_on_awake", c.play_on_awake}
+						};
+					},
+					[](BackgroundMusicComponent& c, const json& j) {
+						c.filepath = j.value("filepath", "");
+						c.volume = j.value("volume", 1.0f);
+						c.loop = j.value("loop", true);
+						c.play_on_awake = j.value("play_on_awake", false);
+						if (!c.filepath.empty()) c.stream = me::audio::load_music(c.filepath.c_str());
+					},
+					[](Registry& reg, entity::entity_id e) {
+						if (auto* c = reg.try_get_component<BackgroundMusicComponent>(e)) me::audio::release(c->stream);
+					});
+				// Same ref-count + fresh-runtime-state rules as AudioSource.
+				m.clone = [](Registry& reg, entity::entity_id s, entity::entity_id d) {
+					if (auto* c = reg.try_get_component<BackgroundMusicComponent>(s)) {
+						BackgroundMusicComponent copy = *c;
+						if (!copy.filepath.empty()) copy.stream = me::audio::load_music(copy.filepath.c_str());
+						copy.has_played_awake = false;
+						copy.trigger_play = copy.trigger_stop = copy.trigger_pause = copy.trigger_resume = false;
+						reg.add_component<BackgroundMusicComponent>(d, copy);
+					}
+				};
+				r.push_back(std::move(m));
+			}
 
 			return r;
 		}

@@ -42,6 +42,18 @@ namespace me::components {
 		// --- MATRIX CACHING ---
 		Matrix model_matrix = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
 
+		// World-space position. For a child this is the parent-relative `position`
+		// pushed through the cached world matrix (so a camera parented to a player
+		// follows it); for a root the two are identical. Roots that live outside
+		// the ECS (the editor fly-cam, the game's fallback view) don't get a
+		// maintained model_matrix, hence the parent check rather than always
+		// reading the matrix.
+		Vector3 world_position() const {
+			if (parent != me::entity::null)
+				return { model_matrix.m12, model_matrix.m13, model_matrix.m14 };
+			return position;
+		}
+
 		Vector3 last_position = { 0.0f, 0.0f, 0.0f };
 		Vector3 last_rotation = { 0.0f, 0.0f, 0.0f };
 		Vector3 last_scale = { 0.0f, 0.0f, 0.0f };
@@ -60,6 +72,13 @@ namespace me::components {
 		me::Color color = me::Color::white;
 		float intensity = 1.0f;
 		float angular_radius = 1.0f; // sun half-angle in DEGREES; drives soft-shadow penumbra (0 = hard)
+		bool cast_shadows = true;    // real-time shadow map in Play/Edit (the path tracer always shadows)
+
+		// Real-time shadow-map tuning. Extent is the world-unit width of the area
+		// (centered on the camera) that receives shadows: smaller = sharper but
+		// shadows end closer; resolution is the depth map size per side.
+		float shadow_extent = 60.0f;
+		int shadow_resolution = 2048;
 	};
 
 	struct CameraComponent {

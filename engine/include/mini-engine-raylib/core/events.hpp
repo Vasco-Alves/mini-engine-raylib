@@ -66,6 +66,11 @@ namespace me {
 			PauseStateChangedEvent(bool paused) : is_paused(paused) {}
 		};
 
+		// A script asked to end the game session (Lua's Engine.quit()). The
+		// front-end decides what that means: the game runtime closes the window,
+		// the editor leaves play mode and returns to editing.
+		class QuitRequestedEvent : public Event {};
+
 	} // namespace me::events
 
 	// 3. The Central Event Bus

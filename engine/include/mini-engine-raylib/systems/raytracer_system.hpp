@@ -12,6 +12,16 @@ namespace me::systems {
 
 	enum class RenderBackend { CPU, GPU };
 
+	// One-click feature bundles. Each is a shortcut for a combination of the
+	// four feature toggles below. The key insight: every noise source in a path
+	// tracer is a *random* sample, so turning the stochastic features off
+	// (soft shadows, indirect/GI) gives a noise-free image AND a faster one.
+	//   Full — everything (reference quality, needs accumulation to converge)
+	//   Lite — no GI, hard shadows; keeps (deterministic) mirrors + sharp glass.
+	//          Noise-free at 1 sample, still has the "ray-traced" look.
+	//   Flat — direct light + hard shadows only. Fastest, flattest, zero noise.
+	enum class RenderQualityPreset { Full, Lite, Flat };
+
 	class RaytracerSystem {
 	public:
 		RaytracerSystem();
@@ -20,6 +30,12 @@ namespace me::systems {
 		void on_start(int width, int height);
 		void on_update(me::Registry& registry, const me::components::CameraComponent& camera, const me::components::TransformComponent& cam_transform);
 		void on_stop();
+
+		// Renders one real-time game frame: rebuilds the scene structures (things
+		// moved since last frame), then accumulates play_samples_per_frame paths
+		// per pixel from the given camera. Call once per frame while a game is
+		// running; get_texture() holds the finished frame afterwards.
+		void render_realtime_frame(me::Registry& registry, const me::components::CameraComponent& camera, const me::components::TransformComponent& cam_transform);
 
 		// Recreates the output texture at a new resolution without reloading
 		// the compute shader or rebuilding SSBOs. Use this for all resize events.
@@ -48,8 +64,50 @@ namespace me::systems {
 		int   preview_samples = 50;
 		float resolution_scale = 0.5f;
 
+		// --- Real-time play settings ---
+		// Used by render_realtime_frame (the editor's "RT Play" mode and the
+		// raytraced game runtime). Noise falls with sqrt(samples); low internal
+		// resolutions (small resolution_scale) are what make high counts affordable.
+		int play_samples_per_frame = 8;
+		// Reuse the same sample seeds every frame: the residual noise freezes into
+		// a stable dither pattern instead of animated static — the difference
+		// between "retro dithered look" and "broken TV".
+		bool lock_noise_pattern = true;
+
 		// --- Lighting/Math Settings ---
 		int max_bounces = 3;
+
+		// --- Feature toggles (shared by both backends and exported games) ---
+		// Each off both removes work AND removes a noise source (when stochastic):
+		//   soft_shadows off → shadow rays aim at the light center → HARD, noise-free
+		//   indirect off     → no diffuse GI bounce (the biggest noise + cost source)
+		//   reflections off  → opaque surfaces don't bounce specularly (no mirrors)
+		//   refraction off   → glass renders as a solid matte object (no see-through)
+		// Mirror reflections and sharp (roughness-0) glass are deterministic, so
+		// "indirect + soft shadows off, reflections + refraction on" is still
+		// noise-free — see RenderQualityPreset.
+		bool enable_soft_shadows = true;
+		bool enable_indirect = true;
+		bool enable_reflections = true;
+		bool enable_refraction = true;
+
+		// Sets the four toggles above from a preset (does not touch unrelated
+		// settings like aperture; for a fully sharp image keep Aperture at 0).
+		void apply_quality_preset(RenderQualityPreset preset) {
+			switch (preset) {
+			case RenderQualityPreset::Full:
+				enable_soft_shadows = enable_indirect = enable_reflections = enable_refraction = true;
+				break;
+			case RenderQualityPreset::Lite:
+				enable_soft_shadows = false; enable_indirect = false;
+				enable_reflections = true;   enable_refraction = true;
+				break;
+			case RenderQualityPreset::Flat:
+				enable_soft_shadows = false; enable_indirect = false;
+				enable_reflections = false;  enable_refraction = false;
+				break;
+			}
+		}
 
 		// --- Environment Settings (shared by the CPU and GPU backends) ---
 		// Defaults reproduce the classic outdoor-sky look (white horizon -> blue
@@ -125,12 +183,26 @@ namespace me::systems {
 		// BVH — rebuilt on reset_accumulation(registry)
 		me::raytracing::BVH m_BVH;
 
+		// --- Real-time rebuild skipping (RT Play) ---
+		// render_realtime_frame rebuilds the BVH + GPU buffers only when the scene
+		// content actually changed since the last build. The hash covers the raw
+		// bytes of every component the flattener/BVH read (transforms, shapes,
+		// models, materials, lights), so any edit forces a rebuild while a
+		// camera-only move (or a paused game) reuses last frame's structures.
+		uint64_t m_LastSceneHash = 0;
+		bool m_RealtimeBuilt = false; // false until the first build after on_start
+		uint64_t scene_content_hash(me::Registry& registry) const;
+
 		// Valid only during on_update — lets trace_ray reach the registry and BVH without passing them through every recursive bounce call.
 		me::Registry* m_ActiveRegistry = nullptr;
 
 		// --- The GPU Flattener ---
 		void flatten_scene(me::Registry& registry);
 		void upload_to_gpu();
+
+		// Last logged flatten stats — flattening is per-frame in RT Play, so the
+		// stats only get logged when they change.
+		std::string m_LastFlattenSummary;
 
 		std::vector<me::render::gpu::GPUNode>       m_GPUNodes;
 		std::vector<me::render::gpu::GPUTriangle>   m_GPUTriangles;
@@ -149,9 +221,36 @@ namespace me::systems {
 		unsigned int m_ssboDirLights = 0;
 		unsigned int m_ssboEmitters = 0;
 
+		// Allocated byte size of each SSBO. upload_to_gpu updates buffers in place
+		// (rlUpdateShaderBuffer) when the new data fits, and only reallocates when
+		// it must grow — avoiding a VRAM free+alloc for all seven buffers every
+		// frame (which is what RT Play used to do).
+		unsigned int m_capNodes = 0;
+		unsigned int m_capTriangles = 0;
+		unsigned int m_capMaterials = 0;
+		unsigned int m_capPrimitives = 0;
+		unsigned int m_capPointLights = 0;
+		unsigned int m_capDirLights = 0;
+		unsigned int m_capEmitters = 0;
+
 		// --- GPU Compute Variables ---
 		unsigned int m_ComputeShaderProgram = 0;
 		void render_gpu_path(me::Registry& registry, const me::components::CameraComponent& camera, const me::components::TransformComponent& cam_transform);
+
+		// Compute-shader uniform locations, queried once when the program links
+		// (in on_start) instead of every frame — render_gpu_path runs every frame
+		// in RT Play, and a glGetUniformLocation per uniform per frame is pure
+		// overhead since the locations never change.
+		struct GpuUniformLocs {
+			int cam_pos = -1, cam_fwd = -1, cam_up = -1, cam_right = -1, cam_fov_scale = -1;
+			int frame_count = -1, total_frames = -1, max_bounces = -1, row_offset = -1;
+			int num_point_lights = -1, num_dir_lights = -1, num_emitters = -1;
+			int ambient_strength = -1, sky_horizon = -1, sky_zenith = -1, sky_intensity = -1;
+			int exposure = -1, aperture = -1, focus_distance = -1, firefly_clamp = -1;
+			int soft_shadows = -1, enable_reflections = -1, enable_refraction = -1, enable_indirect = -1;
+		};
+		GpuUniformLocs m_Loc{};
+		void cache_gpu_uniform_locations();
 	};
 
 } // namespace me::systems

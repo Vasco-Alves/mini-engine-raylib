@@ -7,8 +7,13 @@
 #include "mini-engine-raylib/ecs/physics_components.hpp"
 
 #include <raymath.h>
+#include <algorithm>
+#include <cmath>
 #include <cstdarg>
+#include <cstdint>
 #include <iostream>
+#include <mutex>
+#include <unordered_map>
 #include <rlgl.h>
 
 // --- JOLT HEADERS ---
@@ -21,7 +26,12 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/ContactListener.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/AllowedDOFs.h>
 
 JPH_SUPPRESS_WARNINGS
 
@@ -98,12 +108,95 @@ namespace me::physics {
 		}
 	};
 
+	// ==========================================
+	// CONTACT EVENT COLLECTOR
+	// ==========================================
+	// Jolt calls the contact listener from its worker threads while Update() runs,
+	// so everything here is mutex-guarded and only *records*; nothing user-facing
+	// (Lua, the registry) is touched until consume() on the main thread.
+	//
+	// Enter/exit is tracked per body PAIR with a touch count: a pair can gain and
+	// lose several sub-shape contacts, but scripts should see exactly one
+	// on_collision_enter when the first lands and one on_collision_exit when the
+	// last separates. Entity ids travel in the bodies' user data.
+	class ContactEventCollector final : public JPH::ContactListener {
+	public:
+		void OnContactAdded(const JPH::Body& body1, const JPH::Body& body2,
+			const JPH::ContactManifold&, JPH::ContactSettings&) override {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			PairRecord& rec = m_Pairs[pair_key(body1.GetID(), body2.GetID())];
+			if (rec.touch_count++ == 0) {
+				rec.a = static_cast<me::entity::entity_id>(body1.GetUserData());
+				rec.b = static_cast<me::entity::entity_id>(body2.GetUserData());
+				m_Events.push_back({ rec.a, rec.b, true });
+			}
+		}
+
+		void OnContactRemoved(const JPH::SubShapeIDPair& pair) override {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			auto it = m_Pairs.find(pair_key(pair.GetBody1ID(), pair.GetBody2ID()));
+			if (it == m_Pairs.end()) return;
+			if (--it->second.touch_count <= 0) {
+				m_Events.push_back({ it->second.a, it->second.b, false });
+				m_Pairs.erase(it);
+			}
+		}
+
+		std::vector<ContactEvent> consume() {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			std::vector<ContactEvent> out;
+			out.swap(m_Events);
+			return out;
+		}
+
+		// Emits the exit events for every live pair involving one body and forgets
+		// those pairs. Used when a body is removed mid-play: Jolt won't report
+		// contact removal for a body that was asleep when it vanished, so the
+		// engine settles the books itself. If Jolt does report the removal on the
+		// next step (awake case), the pair is already gone here and the callback
+		// finds nothing — no double event.
+		void flush_body(JPH::BodyID id) {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			const std::uint32_t needle = id.GetIndexAndSequenceNumber();
+			for (auto it = m_Pairs.begin(); it != m_Pairs.end(); ) {
+				const std::uint32_t hi = static_cast<std::uint32_t>(it->first >> 32);
+				const std::uint32_t lo = static_cast<std::uint32_t>(it->first);
+				if (hi == needle || lo == needle) {
+					m_Events.push_back({ it->second.a, it->second.b, false });
+					it = m_Pairs.erase(it);
+				} else {
+					++it;
+				}
+			}
+		}
+
+	private:
+		// One key per unordered body pair, so (a,b) and (b,a) match.
+		static std::uint64_t pair_key(JPH::BodyID a, JPH::BodyID b) {
+			std::uint32_t x = a.GetIndexAndSequenceNumber();
+			std::uint32_t y = b.GetIndexAndSequenceNumber();
+			if (x > y) std::swap(x, y);
+			return (static_cast<std::uint64_t>(x) << 32) | y;
+		}
+
+		struct PairRecord {
+			me::entity::entity_id a = me::entity::null;
+			me::entity::entity_id b = me::entity::null;
+			int touch_count = 0;
+		};
+
+		std::mutex m_Mutex;
+		std::unordered_map<std::uint64_t, PairRecord> m_Pairs;
+		std::vector<ContactEvent> m_Events;
+	};
+
 	static JPH::PhysicsSystem* s_PhysicsSystem = nullptr;
 	static JPH::TempAllocatorImpl* s_TempAllocator = nullptr;
 	static JPH::JobSystemThreadPool* s_JobSystem = nullptr;
 	static BPLayerInterfaceImpl* s_BPLayerInterface = nullptr;
 	static ObjectVsBroadPhaseLayerFilterImpl* s_ObjectVsBroadphaseFilter = nullptr;
 	static ObjectLayerPairFilterImpl* s_ObjectVsObjectFilter = nullptr;
+	static ContactEventCollector* s_ContactCollector = nullptr;
 
 	// ==========================================
 	// ENGINE LIFECYCLE
@@ -127,6 +220,115 @@ namespace me::physics {
 	}
 
 	// ==========================================
+	// BODY CREATION (shared by on_play and add_body)
+	// ==========================================
+
+	// Creates and registers the Jolt body for one entity. Requires a Transform and a
+	// collider next to the RigidBody; quietly skips the entity otherwise.
+	static bool create_body(me::Registry& registry, me::entity::entity_id e, me::components::RigidBodyComponent& rb) {
+		auto* transform = registry.try_get_component<me::components::TransformComponent>(e);
+
+		// Extract collider types
+		auto* box_col = registry.try_get_component<me::components::BoxColliderComponent>(e);
+		auto* sphere_col = registry.try_get_component<me::components::SphereColliderComponent>(e);
+
+		if (!transform || (!box_col && !sphere_col)) return false;
+
+		JPH::BodyInterface& body_interface = s_PhysicsSystem->GetBodyInterface();
+		JPH::ShapeRefC shape;
+
+		// --- BOX COLLIDER MATH ---
+		if (box_col) {
+			float ext_x = std::abs(box_col->half_extents.x * transform->scale.x);
+			float ext_y = std::abs(box_col->half_extents.y * transform->scale.y);
+			float ext_z = std::abs(box_col->half_extents.z * transform->scale.z);
+
+			if (ext_x <= 0.001f || ext_y <= 0.001f || ext_z <= 0.001f) {
+				me::logger::warn("Skipping Box Entity " + std::to_string(e) + " - Physics Colliders cannot have a thickness of zero!");
+				return false;
+			}
+
+			JPH::BoxShapeSettings shape_settings(JPH::Vec3(ext_x, ext_y, ext_z));
+			JPH::ShapeSettings::ShapeResult shape_result = shape_settings.Create();
+
+			if (!shape_result.IsValid()) {
+				me::logger::error("Jolt failed to create box shape for Entity " + std::to_string(e));
+				return false;
+			}
+			shape = shape_result.Get();
+		}
+
+		// --- SPHERE COLLIDER MATH ---
+		else if (sphere_col) {
+			float scaled_radius = std::abs(sphere_col->radius * transform->scale.x);
+
+			if (scaled_radius <= 0.001f) {
+				me::logger::warn("Skipping Sphere Entity " + std::to_string(e) + " - Radius cannot be zero!");
+				return false;
+			}
+
+			JPH::SphereShapeSettings shape_settings(scaled_radius);
+			JPH::ShapeSettings::ShapeResult shape_result = shape_settings.Create();
+
+			if (!shape_result.IsValid()) {
+				me::logger::error("Jolt failed to create sphere shape for Entity " + std::to_string(e));
+				return false;
+			}
+			shape = shape_result.Get();
+		}
+
+		// --- COMMON BODY CREATION ---
+		Quaternion ray_quat = QuaternionFromEuler(
+			transform->rotation.x * DEG2RAD,
+			transform->rotation.y * DEG2RAD,
+			transform->rotation.z * DEG2RAD
+		);
+
+		JPH::RVec3 position(transform->position.x, transform->position.y, transform->position.z);
+		JPH::Quat rotation(ray_quat.x, ray_quat.y, ray_quat.z, ray_quat.w);
+
+		JPH::ObjectLayer layer = (rb.type == me::components::RigidBodyType::Static) ? Layers::NON_MOVING : Layers::MOVING;
+		JPH::EMotionType motion_type = JPH::EMotionType::Dynamic;
+		if (rb.type == me::components::RigidBodyType::Static) motion_type = JPH::EMotionType::Static;
+		if (rb.type == me::components::RigidBodyType::Kinematic) motion_type = JPH::EMotionType::Kinematic;
+
+		JPH::BodyCreationSettings body_settings(shape, position, rotation, motion_type, layer);
+		body_settings.mRestitution = rb.bounciness;
+		body_settings.mFriction = rb.friction;
+		body_settings.mIsSensor = rb.is_trigger;
+
+		// Lock requested rotation axes (e.g. an upright character that must not tip
+		// over). Start from all six DOFs and clear the frozen rotation bits.
+		uint8_t dofs = static_cast<uint8_t>(JPH::EAllowedDOFs::All);
+		if (rb.freeze_rot_x) dofs &= ~static_cast<uint8_t>(JPH::EAllowedDOFs::RotationX);
+		if (rb.freeze_rot_y) dofs &= ~static_cast<uint8_t>(JPH::EAllowedDOFs::RotationY);
+		if (rb.freeze_rot_z) dofs &= ~static_cast<uint8_t>(JPH::EAllowedDOFs::RotationZ);
+		body_settings.mAllowedDOFs = static_cast<JPH::EAllowedDOFs>(dofs);
+		// The contact listener and raycasts read the entity id back out of here.
+		body_settings.mUserData = static_cast<JPH::uint64>(e);
+		// Jolt reports OnContactRemoved when an island falls asleep (~0.5 s of
+		// rest), which would fire a false on_collision_exit on every resting
+		// body — a grounded player would "leave the floor" by standing still.
+		// At this engine's scene scale, keeping bodies awake is the simple,
+		// correct trade: contact events always mirror physical reality.
+		body_settings.mAllowSleeping = false;
+		if (motion_type == JPH::EMotionType::Dynamic) {
+			body_settings.mMassPropertiesOverride.mMass = std::max(rb.mass, 0.001f);
+			body_settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
+		}
+
+		JPH::Body* body = body_interface.CreateBody(body_settings);
+		if (body == nullptr) {
+			me::logger::error("Jolt returned a null body for Entity " + std::to_string(e));
+			return false;
+		}
+
+		rb.runtime_body_id = body->GetID().GetIndexAndSequenceNumber();
+		body_interface.AddBody(body->GetID(), JPH::EActivation::Activate);
+		return true;
+	}
+
+	// ==========================================
 	// PLAY / STOP LIFECYCLE
 	// ==========================================
 
@@ -141,102 +343,44 @@ namespace me::physics {
 		s_PhysicsSystem = new JPH::PhysicsSystem();
 		s_PhysicsSystem->Init(1024, 0, 1024, 1024, *s_BPLayerInterface, *s_ObjectVsBroadphaseFilter, *s_ObjectVsObjectFilter);
 
-		JPH::BodyInterface& body_interface = s_PhysicsSystem->GetBodyInterface();
+		s_ContactCollector = new ContactEventCollector();
+		s_PhysicsSystem->SetContactListener(s_ContactCollector);
 
-		auto& rb_pool = registry.view<me::components::RigidBodyComponent>();
-		for (size_t i = 0; i < rb_pool.size(); ++i) {
-			auto e = rb_pool.entity_map[i];
-			auto& rb = rb_pool.components[i];
-			auto* transform = registry.try_get_component<me::components::TransformComponent>(e);
-
-			// Extract collider types
-			auto* box_col = registry.try_get_component<me::components::BoxColliderComponent>(e);
-			auto* sphere_col = registry.try_get_component<me::components::SphereColliderComponent>(e);
-
-			if (transform && (box_col || sphere_col)) {
-
-				JPH::ShapeRefC shape;
-
-				// --- BOX COLLIDER MATH ---
-				if (box_col) {
-					float ext_x = std::abs(box_col->half_extents.x * transform->scale.x);
-					float ext_y = std::abs(box_col->half_extents.y * transform->scale.y);
-					float ext_z = std::abs(box_col->half_extents.z * transform->scale.z);
-
-					if (ext_x <= 0.001f || ext_y <= 0.001f || ext_z <= 0.001f) {
-						me::logger::warn("Skipping Box Entity " + std::to_string(e) + " - Physics Colliders cannot have a thickness of zero!");
-						continue;
-					}
-
-					JPH::BoxShapeSettings shape_settings(JPH::Vec3(ext_x, ext_y, ext_z));
-					JPH::ShapeSettings::ShapeResult shape_result = shape_settings.Create();
-
-					if (!shape_result.IsValid()) {
-						me::logger::error("Jolt failed to create box shape for Entity " + std::to_string(e));
-						continue;
-					}
-					shape = shape_result.Get();
-				}
-
-				// --- SPHERE COLLIDER MATH ---
-				else if (sphere_col) {
-					float scaled_radius = std::abs(sphere_col->radius * transform->scale.x);
-
-					if (scaled_radius <= 0.001f) {
-						me::logger::warn("Skipping Sphere Entity " + std::to_string(e) + " - Radius cannot be zero!");
-						continue;
-					}
-
-					JPH::SphereShapeSettings shape_settings(scaled_radius);
-					JPH::ShapeSettings::ShapeResult shape_result = shape_settings.Create();
-
-					if (!shape_result.IsValid()) {
-						me::logger::error("Jolt failed to create sphere shape for Entity " + std::to_string(e));
-						continue;
-					}
-					shape = shape_result.Get();
-				}
-
-				// --- COMMON BODY CREATION ---
-				Quaternion ray_quat = QuaternionFromEuler(
-					transform->rotation.x * DEG2RAD,
-					transform->rotation.y * DEG2RAD,
-					transform->rotation.z * DEG2RAD
-				);
-
-				JPH::RVec3 position(transform->position.x, transform->position.y, transform->position.z);
-				JPH::Quat rotation(ray_quat.x, ray_quat.y, ray_quat.z, ray_quat.w);
-
-				JPH::ObjectLayer layer = (rb.type == me::components::RigidBodyType::Static) ? Layers::NON_MOVING : Layers::MOVING;
-				JPH::EMotionType motion_type = JPH::EMotionType::Dynamic;
-				if (rb.type == me::components::RigidBodyType::Static) motion_type = JPH::EMotionType::Static;
-				if (rb.type == me::components::RigidBodyType::Kinematic) motion_type = JPH::EMotionType::Kinematic;
-
-				JPH::BodyCreationSettings body_settings(shape, position, rotation, motion_type, layer);
-				body_settings.mRestitution = rb.bounciness;
-				body_settings.mFriction = rb.friction;
-				if (motion_type == JPH::EMotionType::Dynamic) {
-					body_settings.mMassPropertiesOverride.mMass = std::max(rb.mass, 0.001f);
-					body_settings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
-				}
-
-				JPH::Body* body = body_interface.CreateBody(body_settings);
-				if (body == nullptr) {
-					me::logger::error("Jolt returned a null body for Entity " + std::to_string(e));
-					continue;
-				}
-
-				rb.runtime_body_id = body->GetID().GetIndexAndSequenceNumber();
-				body_interface.AddBody(body->GetID(), JPH::EActivation::Activate);
-			}
-		}
+		for (auto [e, rb] : registry.view<me::components::RigidBodyComponent>())
+			create_body(registry, e, rb);
 
 		s_PhysicsSystem->OptimizeBroadPhase();
+	}
+
+	void add_body(me::Registry& registry, me::entity::entity_id e) {
+		if (!s_PhysicsSystem) return; // not simulating — the next on_play picks the entity up
+
+		auto* rb = registry.try_get_component<me::components::RigidBodyComponent>(e);
+		if (!rb || rb->runtime_body_id != 0xFFFFFFFF) return; // no RigidBody, or already live
+
+		create_body(registry, e, *rb);
+	}
+
+	void remove_body(me::Registry& registry, me::entity::entity_id e) {
+		if (!s_PhysicsSystem) return; // on_stop destroys the whole physics world anyway
+
+		auto* rb = registry.try_get_component<me::components::RigidBodyComponent>(e);
+		if (!rb || rb->runtime_body_id == 0xFFFFFFFF) return;
+
+		JPH::BodyInterface& body_interface = s_PhysicsSystem->GetBodyInterface();
+		JPH::BodyID id(rb->runtime_body_id);
+		if (body_interface.IsAdded(id)) body_interface.RemoveBody(id);
+		body_interface.DestroyBody(id);
+		rb->runtime_body_id = 0xFFFFFFFF;
+
+		// The body's live contacts end now — scripts get their on_collision_exit.
+		if (s_ContactCollector) s_ContactCollector->flush_body(id);
 	}
 
 	void on_stop() {
 		// Clean up the physics simulation entirely
 		delete s_PhysicsSystem; s_PhysicsSystem = nullptr;
+		delete s_ContactCollector; s_ContactCollector = nullptr;
 		delete s_ObjectVsObjectFilter; s_ObjectVsObjectFilter = nullptr;
 		delete s_ObjectVsBroadphaseFilter; s_ObjectVsBroadphaseFilter = nullptr;
 		delete s_BPLayerInterface; s_BPLayerInterface = nullptr;
@@ -250,50 +394,45 @@ namespace me::physics {
 		// Skip physics step if dt is zero
 		if (dt <= 0.0f) return;
 
-		const int collision_steps = 1;
+		// A long stall (window drag, debugger break) must not make the simulation
+		// try to catch up with one giant step — clamp the frame to a sane maximum.
+		dt = std::min(dt, 0.1f);
+
+		// Jolt wants individual steps no longer than ~1/60 s; it divides dt by the
+		// collision-step count internally, so subdividing big frames keeps slow
+		// machines from tunneling fast bodies through thin colliders.
+		const int collision_steps = std::clamp(static_cast<int>(std::ceil(dt * 60.0f)), 1, 6);
 		s_PhysicsSystem->Update(dt, collision_steps, s_TempAllocator, s_JobSystem);
 
 		JPH::BodyInterface& body_interface = s_PhysicsSystem->GetBodyInterface();
-		auto& rb_pool = registry.view<me::components::RigidBodyComponent>();
 
-		for (size_t i = 0; i < rb_pool.size(); ++i) {
-			auto e = rb_pool.entity_map[i];
-			auto& rb = rb_pool.components[i];
-
+		for (auto [e, rb, transform] : registry.view<me::components::RigidBodyComponent, me::components::TransformComponent>()) {
+			(void)e;
 			if (rb.type != me::components::RigidBodyType::Static && rb.runtime_body_id != 0xFFFFFFFF) {
-				auto* transform = registry.try_get_component<me::components::TransformComponent>(e);
-				if (transform) {
-					JPH::BodyID id(rb.runtime_body_id);
+				JPH::BodyID id(rb.runtime_body_id);
 
-					if (!body_interface.IsAdded(id)) continue;
+				if (!body_interface.IsAdded(id)) continue;
 
-					JPH::RVec3 pos = body_interface.GetPosition(id);
-					JPH::Quat rot = body_interface.GetRotation(id);
+				JPH::RVec3 pos = body_interface.GetPosition(id);
+				JPH::Quat rot = body_interface.GetRotation(id);
 
-					transform->position = { pos.GetX(), pos.GetY(), pos.GetZ() };
+				transform.position = { pos.GetX(), pos.GetY(), pos.GetZ() };
 
-					Quaternion ray_quat = { rot.GetX(), rot.GetY(), rot.GetZ(), rot.GetW() };
-					Vector3 euler = QuaternionToEuler(ray_quat);
-					transform->rotation = { euler.x * RAD2DEG, euler.y * RAD2DEG, euler.z * RAD2DEG };
+				Quaternion ray_quat = { rot.GetX(), rot.GetY(), rot.GetZ(), rot.GetW() };
+				Vector3 euler = QuaternionToEuler(ray_quat);
+				transform.rotation = { euler.x * RAD2DEG, euler.y * RAD2DEG, euler.z * RAD2DEG };
 
-					transform->is_dirty = true;
-				}
+				transform.is_dirty = true;
 			}
 		}
 	}
 
 	void draw_debug(me::Registry& registry) {
-		auto& rb_pool = registry.view<me::components::RigidBodyComponent>();
-
-		for (size_t i = 0; i < rb_pool.size(); ++i) {
-			auto e = rb_pool.entity_map[i];
-			auto& rb = rb_pool.components[i];
-			auto* transform = registry.try_get_component<me::components::TransformComponent>(e);
-
+		for (auto [e, rb, transform] : registry.view<me::components::RigidBodyComponent, me::components::TransformComponent>()) {
 			auto* box_col = registry.try_get_component<me::components::BoxColliderComponent>(e);
 			auto* sphere_col = registry.try_get_component<me::components::SphereColliderComponent>(e);
 
-			if (transform && (box_col || sphere_col)) {
+			if (box_col || sphere_col) {
 				::Color wire_color = { 0, 228, 48, 255 }; // Green (Dynamic)
 
 				if (rb.type == me::components::RigidBodyType::Static)
@@ -305,7 +444,7 @@ namespace me::physics {
 				rlPushMatrix();
 
 				// Inject entity's transform matrix directly into the GPU
-				Matrix glMatrix = MatrixTranspose(transform->model_matrix);
+				Matrix glMatrix = MatrixTranspose(transform.model_matrix);
 				rlMultMatrixf((float*)&glMatrix);
 
 				if (box_col && box_col->show_debug) {
@@ -375,6 +514,89 @@ namespace me::physics {
 				body_interface.SetLinearVelocity(id, JPH::Vec3(world_vel.x, world_vel.y, world_vel.z));
 			}
 		}
+	}
+
+	// Looks up an entity's live Jolt body; returns an invalid id when the entity has no
+	// RigidBody, the body was never created, or the simulation isn't running.
+	static JPH::BodyID find_body(me::entity::entity_id e) {
+		if (!s_PhysicsSystem) return JPH::BodyID();
+
+		auto& reg = me::get_registry();
+		auto* rb = reg.try_get_component<me::components::RigidBodyComponent>(e);
+		if (!rb || rb->runtime_body_id == 0xFFFFFFFF) return JPH::BodyID();
+
+		JPH::BodyID id(rb->runtime_body_id);
+		if (!s_PhysicsSystem->GetBodyInterface().IsAdded(id)) return JPH::BodyID();
+		return id;
+	}
+
+	Vector3 get_linear_velocity(me::entity::entity_id e) {
+		JPH::BodyID id = find_body(e);
+		if (id.IsInvalid()) return { 0.0f, 0.0f, 0.0f };
+
+		JPH::Vec3 v = s_PhysicsSystem->GetBodyInterface().GetLinearVelocity(id);
+		return { v.GetX(), v.GetY(), v.GetZ() };
+	}
+
+	void set_angular_velocity(me::entity::entity_id e, float x, float y, float z) {
+		JPH::BodyID id = find_body(e);
+		if (id.IsInvalid()) return;
+
+		JPH::BodyInterface& body_interface = s_PhysicsSystem->GetBodyInterface();
+		body_interface.ActivateBody(id);
+		body_interface.SetAngularVelocity(id, JPH::Vec3(x, y, z));
+	}
+
+	void apply_impulse(me::entity::entity_id e, float x, float y, float z) {
+		JPH::BodyID id = find_body(e);
+		if (id.IsInvalid()) return;
+
+		// AddImpulse activates the body itself.
+		s_PhysicsSystem->GetBodyInterface().AddImpulse(id, JPH::Vec3(x, y, z));
+	}
+
+	void teleport_body(me::entity::entity_id e, float x, float y, float z) {
+		JPH::BodyID id = find_body(e);
+		if (id.IsInvalid()) return;
+
+		// Static bodies must not be activated (Jolt asserts); they can still be moved.
+		auto* rb = me::get_registry().try_get_component<me::components::RigidBodyComponent>(e);
+		const bool is_static = rb && rb->type == me::components::RigidBodyType::Static;
+
+		s_PhysicsSystem->GetBodyInterface().SetPosition(id, JPH::RVec3(x, y, z),
+			is_static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+	}
+
+	std::vector<ContactEvent> consume_contact_events() {
+		if (!s_ContactCollector) return {};
+		return s_ContactCollector->consume();
+	}
+
+	RaycastHit raycast(Vector3 origin, Vector3 direction, float max_distance) {
+		RaycastHit out{};
+		if (!s_PhysicsSystem || max_distance <= 0.0f) return out;
+		if (Vector3LengthSqr(direction) < 1e-12f) return out;
+
+		Vector3 d = Vector3Scale(Vector3Normalize(direction), max_distance);
+		JPH::RRayCast ray{ JPH::RVec3(origin.x, origin.y, origin.z), JPH::Vec3(d.x, d.y, d.z) };
+
+		JPH::RayCastResult result;
+		if (!s_PhysicsSystem->GetNarrowPhaseQuery().CastRay(ray, result)) return out;
+
+		out.hit = true;
+		out.distance = result.mFraction * max_distance;
+		JPH::RVec3 p = ray.GetPointOnRay(result.mFraction);
+		out.point = { p.GetX(), p.GetY(), p.GetZ() };
+
+		// The entity id and the surface normal need the body itself.
+		JPH::BodyLockRead lock(s_PhysicsSystem->GetBodyLockInterface(), result.mBodyID);
+		if (lock.Succeeded()) {
+			const JPH::Body& body = lock.GetBody();
+			out.entity = static_cast<me::entity::entity_id>(body.GetUserData());
+			JPH::Vec3 n = body.GetWorldSpaceSurfaceNormal(result.mSubShapeID2, p);
+			out.normal = { n.GetX(), n.GetY(), n.GetZ() };
+		}
+		return out;
 	}
 
 } // namespace me::physics

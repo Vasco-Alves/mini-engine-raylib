@@ -36,13 +36,8 @@ namespace editor {
 
 		ImGui::Begin("Scene Hierarchy");
 
-		auto& transform_pool = m_Context->view<me::components::TransformComponent>();
-
 		// 1. Draw only Root Entities (entities without a parent)
-		for (size_t i = 0; i < transform_pool.size(); ++i) {
-			me::entity::entity_id entity = transform_pool.entity_map[i];
-			auto& t = transform_pool.components[i];
-
+		for (auto [entity, t] : m_Context->view<me::components::TransformComponent>()) {
 			// Only kick off the drawing chain if it's a top-level object
 			if (t.parent == me::entity::null) {
 				draw_entity_node(entity, command_history);
@@ -114,7 +109,7 @@ namespace editor {
 				if (!tag) m_Context->add_component<me::components::TagComponent>(entity, before);
 				if (after.name != before.name) {
 					command_history.AddCommand(std::make_unique<editor::ModifyComponentCommand<me::components::TagComponent>>(
-						me::Entity(entity, m_Context), before, after));
+						m_Context->get_entity(entity), before, after));
 				}
 			}
 			m_RenamingEntity = me::entity::null;

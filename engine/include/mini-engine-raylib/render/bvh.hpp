@@ -348,11 +348,7 @@ namespace me::raytracing {
 			m_prim_indices.clear();
 			m_prims.clear();
 
-			auto& transforms = registry.view<me::components::TransformComponent>();
-			for (size_t i = 0; i < transforms.size(); ++i) {
-				me::entity::entity_id e = transforms.entity_map[i];
-				const auto& t = transforms.components[i];
-
+			for (auto [e, t] : registry.view<me::components::TransformComponent>()) {
 				auto* shape = registry.try_get_component<me::components::Shape3DComponent>(e);
 				auto* model = registry.try_get_component<me::components::Model3DComponent>(e);
 

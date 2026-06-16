@@ -88,7 +88,6 @@ namespace me::systems {
 
 	void transform_update() {
 		auto& reg = me::get_registry();
-		auto& transforms = reg.view<me::components::TransformComponent>();
 
 		Matrix identity = MatrixIdentity();
 		s_visited.clear();
@@ -96,10 +95,7 @@ namespace me::systems {
 		// Sweep 1: roots — no parent, or a parent that doesn't resolve (a
 		// corrupt file or a stale id). Treating broken parents as roots keeps
 		// those entities updating and visible instead of frozen forever.
-		for (size_t i = 0; i < transforms.size(); ++i) {
-			auto e = transforms.entity_map[i];
-			auto& t = transforms.components[i];
-
+		for (auto [e, t] : reg.view<me::components::TransformComponent>()) {
 			bool parent_resolves = t.parent != me::entity::null
 				&& reg.try_get_component<me::components::TransformComponent>(t.parent) != nullptr;
 			if (!parent_resolves) {
@@ -111,8 +107,8 @@ namespace me::systems {
 		// Sweep 2: anything still unvisited sits in a parent cycle with no
 		// root (e.g. A and B parenting each other). Update each standalone so
 		// the entities stay visible and editable rather than disappearing.
-		for (size_t i = 0; i < transforms.size(); ++i) {
-			auto e = transforms.entity_map[i];
+		for (auto [e, t] : reg.view<me::components::TransformComponent>()) {
+			(void)t;
 			if (!s_visited.contains(e)) {
 				if (!s_cycle_warned) {
 					me::logger::warn("Transform hierarchy contains a cycle - breaking the loop (check the scene file).");

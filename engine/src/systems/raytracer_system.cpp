@@ -58,6 +58,10 @@ namespace me::systems {
 		// BVH is built lazily on the first on_update call because the registry may not be fully populated at start time.
 		m_FrameCount = 1;
 
+		// Force render_realtime_frame to build on its first frame (the BVH/SSBOs
+		// may be stale from a previous play/render session).
+		m_RealtimeBuilt = false;
+
 		// --- LOAD COMPUTE SHADER ---
 		std::string compShaderSrc = me::fs::read_text("engine://shaders/raytracer.comp");
 
@@ -66,6 +70,7 @@ namespace me::systems {
 			m_ComputeShaderProgram = rlLoadShaderProgramCompute(csId);
 
 			if (m_ComputeShaderProgram != 0) {
+				cache_gpu_uniform_locations();
 				me::logger::info("Compute Shader compiled and linked successfully!");
 			} else {
 				me::logger::error("Failed to link compute shader program!");
@@ -75,6 +80,34 @@ namespace me::systems {
 		}
 
 		me::logger::info("Raytracer initialized at " + std::to_string(width) + "x" + std::to_string(height));
+	}
+
+	void RaytracerSystem::cache_gpu_uniform_locations() {
+		auto loc = [&](const char* name) { return rlGetLocationUniform(m_ComputeShaderProgram, name); };
+		m_Loc.cam_pos = loc("cam_pos");
+		m_Loc.cam_fwd = loc("cam_fwd");
+		m_Loc.cam_up = loc("cam_up");
+		m_Loc.cam_right = loc("cam_right");
+		m_Loc.cam_fov_scale = loc("cam_fov_scale");
+		m_Loc.frame_count = loc("frame_count");
+		m_Loc.total_frames = loc("total_frames");
+		m_Loc.max_bounces = loc("max_bounces");
+		m_Loc.row_offset = loc("row_offset");
+		m_Loc.num_point_lights = loc("num_point_lights");
+		m_Loc.num_dir_lights = loc("num_dir_lights");
+		m_Loc.num_emitters = loc("num_emitters");
+		m_Loc.ambient_strength = loc("ambient_strength");
+		m_Loc.sky_horizon = loc("sky_horizon");
+		m_Loc.sky_zenith = loc("sky_zenith");
+		m_Loc.sky_intensity = loc("sky_intensity");
+		m_Loc.exposure = loc("exposure");
+		m_Loc.aperture = loc("aperture");
+		m_Loc.focus_distance = loc("focus_distance");
+		m_Loc.firefly_clamp = loc("firefly_clamp");
+		m_Loc.soft_shadows = loc("soft_shadows");
+		m_Loc.enable_reflections = loc("enable_reflections");
+		m_Loc.enable_refraction = loc("enable_refraction");
+		m_Loc.enable_indirect = loc("enable_indirect");
 	}
 
 	void RaytracerSystem::on_stop() {
@@ -102,6 +135,10 @@ namespace me::systems {
 		m_ssboPointLights = 0;
 		m_ssboDirLights = 0;
 		m_ssboEmitters = 0;
+
+		m_capNodes = m_capTriangles = m_capMaterials = m_capPrimitives = 0;
+		m_capPointLights = m_capDirLights = m_capEmitters = 0;
+		m_RealtimeBuilt = false;
 
 		m_AccumulationBuffer.clear();
 		m_PixelData.clear();
@@ -140,6 +177,50 @@ namespace me::systems {
 			flatten_scene(*registry);
 			upload_to_gpu();
 		}
+	}
+
+	void RaytracerSystem::render_realtime_frame(me::Registry& registry,
+		const me::components::CameraComponent& camera,
+		const me::components::TransformComponent& cam_transform) {
+
+		// Borrow the progressive-accumulation machinery for an in-frame burst:
+		// N samples accumulate, the frame is done, and the next frame starts
+		// fresh because the scene has moved.
+		const bool saved_accumulate = accumulate;
+		const int  saved_target = preview_samples;
+		const int  samples = std::max(1, play_samples_per_frame);
+		accumulate = true;
+		// on_update early-outs once m_FrameCount reaches the target, and the
+		// counter sits at k+1 after k samples — +1 so all N samples render.
+		preview_samples = samples + 1;
+
+		// With a locked pattern the per-pixel seed salt restarts identically
+		// every frame (it still varies across the N samples *within* a frame),
+		// so the residual noise reads as a fixed dither, not animated static.
+		if (lock_noise_pattern) m_TotalFramesRendered = 0;
+
+		// Rebuild the BVH + GPU buffers only when the scene content changed since
+		// last frame. A camera-only move (or a paused game) reuses last frame's
+		// structures — the camera is uploaded fresh per dispatch, not baked into
+		// them — turning the most expensive part of the frame into a no-op.
+		const uint64_t hash = scene_content_hash(registry);
+		if (!m_RealtimeBuilt || hash != m_LastSceneHash) {
+			m_BVH.build(registry);
+			flatten_scene(registry);
+			upload_to_gpu();
+			m_LastSceneHash = hash;
+			m_RealtimeBuilt = true;
+		}
+
+		// Clear the accumulation buffer for a fresh burst (does NOT rebuild the
+		// scene — that's the conditional block above).
+		reset_accumulation();
+
+		for (int i = 0; i < samples; ++i)
+			on_update(registry, camera, cam_transform);
+
+		accumulate = saved_accumulate;
+		preview_samples = saved_target;
 	}
 
 	bool RaytracerSystem::focus_on_ray(me::Registry& registry, const Vector3& origin, const Vector3& dir) {
@@ -306,9 +387,11 @@ namespace me::systems {
 		float vx = ndc_x * aspect * scale;
 		float vy = ndc_y * scale;
 
+		// World-space eye (a child camera's `position` is parent-relative).
+		Vector3 eye = cam_transform.world_position();
+
 		Vector3 fwd = Vector3Normalize(Vector3Subtract(
-			{ camera.target.x, camera.target.y, camera.target.z },
-			cam_transform.position));
+			{ camera.target.x, camera.target.y, camera.target.z }, eye));
 		Vector3 up = Vector3Normalize({ camera.up.x, camera.up.y, camera.up.z });
 		Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, up));
 		Vector3 true_up = Vector3CrossProduct(right, fwd);
@@ -321,20 +404,20 @@ namespace me::systems {
 
 		// Pinhole camera unless an aperture is set.
 		if (aperture <= 0.0f)
-			return { cam_transform.position, dir };
+			return { eye, dir };
 
 		// Depth of field: jitter the ray origin over a lens disk and re-aim it at the
 		// focal plane, so points off that plane blur. Accumulation averages it into bokeh.
 		// The lens sample MUST be per-pixel (random_float(seed)) — using a per-frame
 		// value would render every pixel through the same lens point each frame, making
 		// the whole image lurch around between frames instead of blurring smoothly.
-		Vector3 focal_point = Vector3Add(cam_transform.position, Vector3Scale(dir, focus_distance));
+		Vector3 focal_point = Vector3Add(eye, Vector3Scale(dir, focus_distance));
 		float lens_r = aperture * std::sqrt(me::raytracing::random_float(seed));
 		float lens_a = 2.0f * PI * me::raytracing::random_float(seed);
 		Vector3 lens_offset = Vector3Add(
 			Vector3Scale(right, std::cos(lens_a) * lens_r),
 			Vector3Scale(true_up, std::sin(lens_a) * lens_r));
-		Vector3 new_origin = Vector3Add(cam_transform.position, lens_offset);
+		Vector3 new_origin = Vector3Add(eye, lens_offset);
 		return { new_origin, Vector3Normalize(Vector3Subtract(focal_point, new_origin)) };
 	}
 
@@ -413,7 +496,12 @@ namespace me::systems {
 
 		if (!hit) return sky_color(ray.direction);
 
-		const HitPayload& p = *hit;
+		// Mutable copy: refraction-disabled glass is rewritten to a matte solid.
+		HitPayload p = *hit;
+		if (!enable_refraction && p.transmission > 0.0f) {
+			p.transmission = 0.0f;
+			p.roughness = 1.0f;
+		}
 		Vector3 shadow_origin = Vector3Add(p.hit_point, Vector3Scale(p.normal, 0.001f));
 
 		// ==========================================
@@ -432,13 +520,9 @@ namespace me::systems {
 		Vector3 direct = { 0.0f, 0.0f, 0.0f };
 
 		// ---- Point lights: sample a disk of `radius` for soft shadows; 1/d² falloff ----
-		auto& light_pool = m_ActiveRegistry->view<me::components::LightComponent>();
-		for (size_t i = 0; i < light_pool.size(); ++i) {
-			auto* lt = m_ActiveRegistry->try_get_component<me::components::TransformComponent>(
-				light_pool.entity_map[i]);
+		for (auto [e, l] : m_ActiveRegistry->view<me::components::LightComponent>()) {
+			auto* lt = m_ActiveRegistry->try_get_component<me::components::TransformComponent>(e);
 			if (!lt) continue;
-
-			auto& l = light_pool.components[i];
 
 			Vector3 lcolor = {
 				std::pow(l.color.r / 255.0f, 2.2f),
@@ -451,14 +535,18 @@ namespace me::systems {
 			if (center_dist < 1e-4f) continue;
 			Vector3 ldir_c = Vector3Scale(to_l, 1.0f / center_dist);
 
-			// Sample a point on a disk of radius l.radius facing the receiver.
-			Vector3 a = (std::abs(ldir_c.x) > 0.9f) ? Vector3{ 0.0f, 1.0f, 0.0f } : Vector3{ 1.0f, 0.0f, 0.0f };
-			Vector3 u = Vector3Normalize(Vector3CrossProduct(ldir_c, a));
-			Vector3 vv = Vector3CrossProduct(ldir_c, u);
-			float   rr = l.radius * std::sqrt(random_float(seed));
-			float   phi = 2.0f * PI * random_float(seed);
-			Vector3 sample_pos = Vector3Add(lt->position,
-				Vector3Add(Vector3Scale(u, std::cos(phi) * rr), Vector3Scale(vv, std::sin(phi) * rr)));
+			// Soft: jitter the sample over the light's disk. Hard: aim at the
+			// center (deterministic → noise-free, crisp shadow edge).
+			Vector3 sample_pos = lt->position;
+			if (enable_soft_shadows) {
+				Vector3 a = (std::abs(ldir_c.x) > 0.9f) ? Vector3{ 0.0f, 1.0f, 0.0f } : Vector3{ 1.0f, 0.0f, 0.0f };
+				Vector3 u = Vector3Normalize(Vector3CrossProduct(ldir_c, a));
+				Vector3 vv = Vector3CrossProduct(ldir_c, u);
+				float   rr = l.radius * std::sqrt(random_float(seed));
+				float   phi = 2.0f * PI * random_float(seed);
+				sample_pos = Vector3Add(lt->position,
+					Vector3Add(Vector3Scale(u, std::cos(phi) * rr), Vector3Scale(vv, std::sin(phi) * rr)));
+			}
 
 			Vector3 lvec = Vector3Subtract(sample_pos, shadow_origin);
 			float   ldist = Vector3Length(lvec);
@@ -475,13 +563,9 @@ namespace me::systems {
 		}
 
 		// ---- Directional lights: cone-sample within `angular_radius` for soft shadows ----
-		auto& dir_pool = m_ActiveRegistry->view<me::components::DirectionalLightComponent>();
-		for (size_t i = 0; i < dir_pool.size(); ++i) {
-			auto* lt = m_ActiveRegistry->try_get_component<me::components::TransformComponent>(
-				dir_pool.entity_map[i]);
+		for (auto [e, dl] : m_ActiveRegistry->view<me::components::DirectionalLightComponent>()) {
+			auto* lt = m_ActiveRegistry->try_get_component<me::components::TransformComponent>(e);
 			if (!lt) continue;
-
-			auto& dl = dir_pool.components[i];
 
 			Vector3 lcolor = {
 				std::pow(dl.color.r / 255.0f, 2.2f),
@@ -496,7 +580,7 @@ namespace me::systems {
 			Vector3 ldir_base = { -fwd.x, -fwd.y, -fwd.z };
 
 			float   cos_max = std::cos(dl.angular_radius * DEG2RAD);
-			Vector3 ldir = sample_cone(ldir_base, cos_max, seed);
+			Vector3 ldir = enable_soft_shadows ? sample_cone(ldir_base, cos_max, seed) : ldir_base;
 			float   ndotl = std::max(0.0f, Vector3DotProduct(p.normal, ldir));
 			if (ndotl <= 0.0f) continue;
 
@@ -524,9 +608,9 @@ namespace me::systems {
 			float cos_max = std::sqrt(1.0f - sin2);
 			float omega = 2.0f * PI * (1.0f - cos_max);
 
-			// Aim the shadow ray at a random point inside the emitter's cone (instead
-			// of dead-center) so the penumbra softens as samples accumulate.
-			Vector3 ldir = sample_cone(ldir_c, cos_max, seed);
+			// Soft: aim at a random point inside the emitter's cone so the penumbra
+			// softens as samples accumulate. Hard: aim at the center (no noise).
+			Vector3 ldir = enable_soft_shadows ? sample_cone(ldir_c, cos_max, seed) : ldir_c;
 			float   ndotl = std::max(0.0f, Vector3DotProduct(p.normal, ldir));
 			if (ndotl <= 0.0f) continue;
 
@@ -560,6 +644,24 @@ namespace me::systems {
 		// ==========================================
 		// 5. BOUNCE (GI + Reflections + Refractions)
 		// ==========================================
+		// Opaque scatter weights, gated by the feature toggles: specular strength
+		// rises as roughness falls (mirrors), diffuse (GI) strength rises with
+		// roughness (matte). A surface whose behaviour is disabled contributes no
+		// bounce — so a matte surface with GI off stays matte (it does NOT become
+		// a mirror), a mirror with reflections off stops reflecting, and Flat mode
+		// skips all opaque bounces. Direct + ambient still show.
+		if (p.transmission <= 0.0f) {
+			float spec_w = enable_reflections ? (1.0f - p.roughness) : 0.0f;
+			float diff_w = enable_indirect ? p.roughness : 0.0f;
+			if (spec_w + diff_w <= 1e-4f) {
+				return Vector3{
+					p.base_color.x * (direct.x + ambient.x),
+					p.base_color.y * (direct.y + ambient.y),
+					p.base_color.z * (direct.z + ambient.z)
+				};
+			}
+		}
+
 		float survival_p = 1.0f;
 
 		// --- RUSSIAN ROULETTE ---
@@ -614,17 +716,32 @@ namespace me::systems {
 
 		} else {
 			// ---- Opaque / Solid path ----
+			// Reflection (specular) and GI (diffuse) are the two ends of one bounce
+			// ray, blended by roughness. The direction is chosen by which feature
+			// is enabled, so each stays correct on its own: with GI off the bounce
+			// is a pure (deterministic) reflection — a matte surface just won't
+			// bounce at all (its weight is zero, handled above) rather than turning
+			// into a mirror.
 			Vector3 reflect_dir = Vector3Normalize(Vector3Reflect(ray.direction, p.normal));
-			Vector3 diffuse_dir = Vector3Normalize(Vector3Add(p.normal, random_unit_vector(seed)));
-			bounce_dir = Vector3Normalize(Vector3Lerp(reflect_dir, diffuse_dir, p.roughness));
+			Vector3 diffuse_dir = enable_indirect
+				? Vector3Normalize(Vector3Add(p.normal, random_unit_vector(seed)))
+				: reflect_dir;
 
-			if (Vector3DotProduct(bounce_dir, p.normal) < 0.0f) bounce_dir = diffuse_dir;
+			if (enable_reflections && enable_indirect)
+				bounce_dir = Vector3Normalize(Vector3Lerp(reflect_dir, diffuse_dir, p.roughness));
+			else if (enable_indirect)
+				bounce_dir = diffuse_dir;   // reflections off → pure diffuse GI
+			else
+				bounce_dir = reflect_dir;   // GI off → pure mirror (no noise)
+
+			if (Vector3DotProduct(bounce_dir, p.normal) < 0.0f)
+				bounce_dir = enable_indirect ? diffuse_dir : reflect_dir;
 
 			bounce_origin = Vector3Add(p.hit_point, Vector3Scale(p.normal, 0.001f));
 
-			// Near-mirror surfaces are specular enough to show emitters; rougher
-			// surfaces are diffuse and already received emitter light via NEE.
-			next_allow_emissive = (p.roughness < 0.1f);
+			// A specular bounce may show emitters; a diffuse one already got them
+			// via NEE. With GI off the bounce is always specular.
+			next_allow_emissive = (p.roughness < 0.1f) || !enable_indirect;
 		}
 
 		Vector3 bounce_color = trace_ray({ bounce_origin, bounce_dir }, depth + 1, seed, next_allow_emissive);
@@ -650,8 +767,11 @@ namespace me::systems {
 			}
 			bounce = { bounce_color.x * absorb.x, bounce_color.y * absorb.y, bounce_color.z * absorb.z };
 		} else {
-			float sw = 1.0f - p.roughness;
-			float dw = p.roughness;
+			// Weights gated by the toggles (match the skip test above): a disabled
+			// end contributes nothing, so the bounce magnitude is correct even
+			// though the single bounce ray went one way.
+			float sw = enable_reflections ? (1.0f - p.roughness) : 0.0f;
+			float dw = enable_indirect ? p.roughness : 0.0f;
 			float bw = sw + dw * 0.5f;
 
 			// FIX: Only smooth plastics reflect pure white. Everything else uses base_color!
@@ -677,6 +797,41 @@ namespace me::systems {
 			p.base_color.y * (direct.y + ambient.y) + bounce.y,
 			p.base_color.z * (direct.z + ambient.z) + bounce.z
 		};
+	}
+
+	uint64_t RaytracerSystem::scene_content_hash(me::Registry& registry) const {
+		// FNV-1a over the raw bytes of every component pool the BVH/flattener read.
+		// Hashing whole struct arrays (rather than enumerating fields) is correct by
+		// construction: any change to any field — position, material, light, or the
+		// SET of entities (the sparse-set reorders on add/remove) — changes the hash.
+		// A stale pointer in Transform's `children` vector can only cause a spurious
+		// rebuild, never a missed one, so it's safe. Cheap: these are small structs,
+		// not the model triangle soup (that lives in the asset cache, keyed by model).
+		uint64_t h = 1469598103934665603ull; // FNV offset basis
+		auto fold = [&h](const void* data, size_t bytes) {
+			const unsigned char* p = static_cast<const unsigned char*>(data);
+			for (size_t i = 0; i < bytes; ++i) { h ^= p[i]; h *= 1099511628211ull; }
+		};
+		// view<T>() iterates the T pool in its native (entity_map) order, so folding
+		// each entity id + component struct is equivalent to the old whole-array
+		// hash: still sensitive to any field change, the entity set, and reordering.
+		auto hash_pool = [&](auto view) {
+			size_t n = 0;
+			for (auto [e, comp] : view) {
+				fold(&e, sizeof(e));
+				fold(&comp, sizeof(comp));
+				++n;
+			}
+			fold(&n, sizeof(n));
+		};
+		using namespace me::components;
+		hash_pool(registry.view<TransformComponent>());
+		hash_pool(registry.view<Shape3DComponent>());
+		hash_pool(registry.view<Model3DComponent>());
+		hash_pool(registry.view<MaterialComponent>());
+		hash_pool(registry.view<LightComponent>());
+		hash_pool(registry.view<DirectionalLightComponent>());
+		return h;
 	}
 
 	void RaytracerSystem::flatten_scene(me::Registry& registry) {
@@ -830,11 +985,9 @@ namespace me::systems {
 		m_GPUPointLights.clear();
 		m_GPUDirLights.clear();
 
-		auto& light_pool = registry.view<me::components::LightComponent>();
-		for (size_t i = 0; i < light_pool.size(); ++i) {
-			auto* lt = registry.try_get_component<me::components::TransformComponent>(light_pool.entity_map[i]);
+		for (auto [e, l] : registry.view<me::components::LightComponent>()) {
+			auto* lt = registry.try_get_component<me::components::TransformComponent>(e);
 			if (!lt) continue;
-			auto& l = light_pool.components[i];
 			me::render::gpu::GPUPointLight gl{};
 			gl.position = lt->position;
 			gl.radius = l.radius;
@@ -843,11 +996,9 @@ namespace me::systems {
 			m_GPUPointLights.push_back(gl);
 		}
 
-		auto& dir_pool = registry.view<me::components::DirectionalLightComponent>();
-		for (size_t i = 0; i < dir_pool.size(); ++i) {
-			auto* lt = registry.try_get_component<me::components::TransformComponent>(dir_pool.entity_map[i]);
+		for (auto [e, dl] : registry.view<me::components::DirectionalLightComponent>()) {
+			auto* lt = registry.try_get_component<me::components::TransformComponent>(e);
 			if (!lt) continue;
-			auto& dl = dir_pool.components[i];
 			float pitch = lt->rotation.x * DEG2RAD;
 			float yaw = lt->rotation.y * DEG2RAD;
 			Vector3 fwd = Vector3Normalize({ std::cos(pitch) * std::sin(yaw), -std::sin(pitch), std::cos(pitch) * std::cos(yaw) });
@@ -859,107 +1010,80 @@ namespace me::systems {
 			m_GPUDirLights.push_back(gd);
 		}
 
-		me::logger::info("GPU Buffers Flattened: " + std::to_string(m_GPUNodes.size()) + " Nodes, " +
+		// Flattening runs every frame in RT Play (and on every edit in Render
+		// mode) — only log when the scene's shape actually changed, or the
+		// console becomes an unreadable loop of identical lines.
+		std::string summary = std::to_string(m_GPUNodes.size()) + " Nodes, " +
 			std::to_string(m_GPUTriangles.size()) + " Triangles, " +
 			std::to_string(m_GPUPrimitives.size()) + " Prims, " +
 			std::to_string(m_GPUPointLights.size()) + " PointLights, " +
 			std::to_string(m_GPUDirLights.size()) + " DirLights, " +
-			std::to_string(m_GPUEmitters.size()) + " Emitters.");
+			std::to_string(m_GPUEmitters.size()) + " Emitters.";
+		if (summary != m_LastFlattenSummary) {
+			m_LastFlattenSummary = summary;
+			me::logger::info("GPU Buffers Flattened: " + summary);
+		}
+	}
+
+	// Uploads `bytes` from `data` into an SSBO, updating it in place when the data
+	// fits the current allocation and only reallocating (free + alloc) when it must
+	// grow. The shader bounds every read by the uploaded counts / node indices, so
+	// stale bytes past the used prefix in an over-sized buffer are never touched.
+	static void upload_ssbo(unsigned int& ssbo, unsigned int& cap, const void* data, unsigned int bytes) {
+		if (bytes == 0) bytes = 1; // SSBOs must be non-zero sized
+		if (ssbo == 0 || bytes > cap) {
+			if (ssbo != 0) rlUnloadShaderBuffer(ssbo);
+			ssbo = rlLoadShaderBuffer(bytes, data, RL_DYNAMIC_DRAW);
+			cap = bytes;
+		} else {
+			rlUpdateShaderBuffer(ssbo, data, bytes, 0);
+		}
 	}
 
 	void RaytracerSystem::upload_to_gpu() {
-		// 1. Delete the old buffers from VRAM if they exist
-		if (m_ssboNodes != 0) rlUnloadShaderBuffer(m_ssboNodes);
-		if (m_ssboTriangles != 0) rlUnloadShaderBuffer(m_ssboTriangles);
-		if (m_ssboMaterials != 0) rlUnloadShaderBuffer(m_ssboMaterials);
-		if (m_ssboPrimitives != 0) rlUnloadShaderBuffer(m_ssboPrimitives);
+		using namespace me::render::gpu;
 
-		// 2. Load the new buffers into VRAM! 
-		// (RL_DYNAMIC_DRAW tells the GPU we might change this data frequently)
-		if (!m_GPUNodes.empty()) {
-			m_ssboNodes = rlLoadShaderBuffer(static_cast<unsigned int>(m_GPUNodes.size() * sizeof(me::render::gpu::GPUNode)), m_GPUNodes.data(), RL_DYNAMIC_DRAW);
-		} else {
-			me::render::gpu::GPUNode dummy{};
-			m_ssboNodes = rlLoadShaderBuffer(sizeof(dummy), &dummy, RL_DYNAMIC_DRAW);
-		}
+		// Empty pools still need a 1-element buffer (a bound SSBO can't be zero
+		// sized); the matching count uniform keeps the shader from reading it.
+		GPUNode      dn{}; GPUTriangle dt{}; GPUMaterial dm{};
+		GPUPrimitive dp{}; GPUPointLight dpl{}; GPUDirLight ddl{}; GPUEmitter de{};
 
-		if (!m_GPUTriangles.empty()) {
-			m_ssboTriangles = rlLoadShaderBuffer(static_cast<unsigned int>(m_GPUTriangles.size() * sizeof(me::render::gpu::GPUTriangle)), m_GPUTriangles.data(), RL_DYNAMIC_DRAW);
-		} else {
-			me::render::gpu::GPUTriangle dummy{};
-			m_ssboTriangles = rlLoadShaderBuffer(sizeof(dummy), &dummy, RL_DYNAMIC_DRAW);
-		}
+		auto up = [](unsigned int& ssbo, unsigned int& cap, const auto& vec, const void* dummy, unsigned int dummy_size) {
+			if (vec.empty()) upload_ssbo(ssbo, cap, dummy, dummy_size);
+			else upload_ssbo(ssbo, cap, vec.data(), static_cast<unsigned int>(vec.size() * sizeof(vec[0])));
+		};
 
-		if (!m_GPUMaterials.empty()) {
-			m_ssboMaterials = rlLoadShaderBuffer(static_cast<unsigned int>(m_GPUMaterials.size() * sizeof(me::render::gpu::GPUMaterial)), m_GPUMaterials.data(), RL_DYNAMIC_DRAW);
-		} else {
-			me::render::gpu::GPUMaterial dummy{};
-			m_ssboMaterials = rlLoadShaderBuffer(sizeof(dummy), &dummy, RL_DYNAMIC_DRAW);
-		}
-
-		if (!m_GPUPrimitives.empty()) {
-			m_ssboPrimitives = rlLoadShaderBuffer(static_cast<unsigned int>(m_GPUPrimitives.size() * sizeof(me::render::gpu::GPUPrimitive)), m_GPUPrimitives.data(), RL_DYNAMIC_DRAW);
-		} else {
-			me::render::gpu::GPUPrimitive dummy{};
-			m_ssboPrimitives = rlLoadShaderBuffer(sizeof(dummy), &dummy, RL_DYNAMIC_DRAW);
-		}
-
-		if (m_ssboPointLights != 0) rlUnloadShaderBuffer(m_ssboPointLights);
-		if (!m_GPUPointLights.empty()) {
-			m_ssboPointLights = rlLoadShaderBuffer(static_cast<unsigned int>(m_GPUPointLights.size() * sizeof(me::render::gpu::GPUPointLight)), m_GPUPointLights.data(), RL_DYNAMIC_DRAW);
-		} else {
-			me::render::gpu::GPUPointLight dummy{};
-			m_ssboPointLights = rlLoadShaderBuffer(sizeof(dummy), &dummy, RL_DYNAMIC_DRAW);
-		}
-
-		if (m_ssboDirLights != 0) rlUnloadShaderBuffer(m_ssboDirLights);
-		if (!m_GPUDirLights.empty()) {
-			m_ssboDirLights = rlLoadShaderBuffer(static_cast<unsigned int>(m_GPUDirLights.size() * sizeof(me::render::gpu::GPUDirLight)), m_GPUDirLights.data(), RL_DYNAMIC_DRAW);
-		} else {
-			me::render::gpu::GPUDirLight dummy{};
-			m_ssboDirLights = rlLoadShaderBuffer(sizeof(dummy), &dummy, RL_DYNAMIC_DRAW);
-		}
-
-		if (m_ssboEmitters != 0) rlUnloadShaderBuffer(m_ssboEmitters);
-		if (!m_GPUEmitters.empty()) {
-			m_ssboEmitters = rlLoadShaderBuffer(static_cast<unsigned int>(m_GPUEmitters.size() * sizeof(me::render::gpu::GPUEmitter)), m_GPUEmitters.data(), RL_DYNAMIC_DRAW);
-		} else {
-			me::render::gpu::GPUEmitter dummy{};
-			m_ssboEmitters = rlLoadShaderBuffer(sizeof(dummy), &dummy, RL_DYNAMIC_DRAW);
-		}
-
-		me::logger::info("GPU SSBOs Uploaded Successfully.");
+		up(m_ssboNodes, m_capNodes, m_GPUNodes, &dn, sizeof(dn));
+		up(m_ssboTriangles, m_capTriangles, m_GPUTriangles, &dt, sizeof(dt));
+		up(m_ssboMaterials, m_capMaterials, m_GPUMaterials, &dm, sizeof(dm));
+		up(m_ssboPrimitives, m_capPrimitives, m_GPUPrimitives, &dp, sizeof(dp));
+		up(m_ssboPointLights, m_capPointLights, m_GPUPointLights, &dpl, sizeof(dpl));
+		up(m_ssboDirLights, m_capDirLights, m_GPUDirLights, &ddl, sizeof(ddl));
+		up(m_ssboEmitters, m_capEmitters, m_GPUEmitters, &de, sizeof(de));
 	}
 
 	void RaytracerSystem::render_gpu_path(me::Registry& registry, const me::components::CameraComponent& camera, const me::components::TransformComponent& cam_transform) {
 
 		rlEnableShader(m_ComputeShaderProgram);
 
-		// 1. Send Camera Uniforms
-		int loc_cam_pos = rlGetLocationUniform(m_ComputeShaderProgram, "cam_pos");
-		int loc_cam_fwd = rlGetLocationUniform(m_ComputeShaderProgram, "cam_fwd");
-		int loc_cam_up = rlGetLocationUniform(m_ComputeShaderProgram, "cam_up");
-		int loc_cam_right = rlGetLocationUniform(m_ComputeShaderProgram, "cam_right");
-		int loc_cam_fov = rlGetLocationUniform(m_ComputeShaderProgram, "cam_fov_scale");
-		int loc_frame_count = rlGetLocationUniform(m_ComputeShaderProgram, "frame_count");
-		int loc_total_frames = rlGetLocationUniform(m_ComputeShaderProgram, "total_frames");
-		int loc_max_bounces = rlGetLocationUniform(m_ComputeShaderProgram, "max_bounces");
-
+		// 1. Send Camera Uniforms (locations cached once at shader load — see
+		// cache_gpu_uniform_locations; this runs every frame in RT Play).
 		float fov_scale = std::tan((camera.fov * 0.5f) * DEG2RAD);
-		Vector3 fwd = Vector3Normalize(Vector3Subtract({ camera.target.x, camera.target.y, camera.target.z }, cam_transform.position));
+		Vector3 eye = cam_transform.world_position(); // child cameras: world, not local
+		Vector3 fwd = Vector3Normalize(Vector3Subtract({ camera.target.x, camera.target.y, camera.target.z }, eye));
 		Vector3 up = Vector3Normalize({ camera.up.x, camera.up.y, camera.up.z });
 		Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, up));
 		Vector3 true_up = Vector3CrossProduct(right, fwd);
 		int max_b = max_bounces; // keep GPU in sync with the CPU / UI setting
 
-		rlSetUniform(loc_cam_pos, &cam_transform.position, RL_SHADER_UNIFORM_VEC3, 1);
-		rlSetUniform(loc_cam_fwd, &fwd, RL_SHADER_UNIFORM_VEC3, 1);
-		rlSetUniform(loc_cam_up, &true_up, RL_SHADER_UNIFORM_VEC3, 1);
-		rlSetUniform(loc_cam_right, &right, RL_SHADER_UNIFORM_VEC3, 1);
-		rlSetUniform(loc_cam_fov, &fov_scale, RL_SHADER_UNIFORM_FLOAT, 1);
-		rlSetUniform(loc_frame_count, &m_FrameCount, RL_SHADER_UNIFORM_UINT, 1);
-		rlSetUniform(loc_total_frames, &m_TotalFramesRendered, RL_SHADER_UNIFORM_UINT, 1);
-		rlSetUniform(loc_max_bounces, &max_b, RL_SHADER_UNIFORM_INT, 1);
+		rlSetUniform(m_Loc.cam_pos, &eye, RL_SHADER_UNIFORM_VEC3, 1);
+		rlSetUniform(m_Loc.cam_fwd, &fwd, RL_SHADER_UNIFORM_VEC3, 1);
+		rlSetUniform(m_Loc.cam_up, &true_up, RL_SHADER_UNIFORM_VEC3, 1);
+		rlSetUniform(m_Loc.cam_right, &right, RL_SHADER_UNIFORM_VEC3, 1);
+		rlSetUniform(m_Loc.cam_fov_scale, &fov_scale, RL_SHADER_UNIFORM_FLOAT, 1);
+		rlSetUniform(m_Loc.frame_count, &m_FrameCount, RL_SHADER_UNIFORM_UINT, 1);
+		rlSetUniform(m_Loc.total_frames, &m_TotalFramesRendered, RL_SHADER_UNIFORM_UINT, 1);
+		rlSetUniform(m_Loc.max_bounces, &max_b, RL_SHADER_UNIFORM_INT, 1);
 
 		// 2. Bind SSBOs (binding numbers must match the shader)
 		rlBindShaderBuffer(m_ssboNodes, 1);
@@ -973,32 +1097,31 @@ namespace me::systems {
 		int num_point = (int)m_GPUPointLights.size();
 		int num_dir = (int)m_GPUDirLights.size();
 		int num_emit = (int)m_GPUEmitters.size();
-		int loc_npl = rlGetLocationUniform(m_ComputeShaderProgram, "num_point_lights");
-		int loc_ndl = rlGetLocationUniform(m_ComputeShaderProgram, "num_dir_lights");
-		int loc_nem = rlGetLocationUniform(m_ComputeShaderProgram, "num_emitters");
-		rlSetUniform(loc_npl, &num_point, RL_SHADER_UNIFORM_INT, 1);
-		rlSetUniform(loc_ndl, &num_dir, RL_SHADER_UNIFORM_INT, 1);
-		rlSetUniform(loc_nem, &num_emit, RL_SHADER_UNIFORM_INT, 1);
+		rlSetUniform(m_Loc.num_point_lights, &num_point, RL_SHADER_UNIFORM_INT, 1);
+		rlSetUniform(m_Loc.num_dir_lights, &num_dir, RL_SHADER_UNIFORM_INT, 1);
+		rlSetUniform(m_Loc.num_emitters, &num_emit, RL_SHADER_UNIFORM_INT, 1);
 
 		// Environment uniforms (sky gradient + ambient fill) — match the CPU path.
-		int loc_amb = rlGetLocationUniform(m_ComputeShaderProgram, "ambient_strength");
-		int loc_sky_h = rlGetLocationUniform(m_ComputeShaderProgram, "sky_horizon");
-		int loc_sky_z = rlGetLocationUniform(m_ComputeShaderProgram, "sky_zenith");
-		int loc_sky_i = rlGetLocationUniform(m_ComputeShaderProgram, "sky_intensity");
-		rlSetUniform(loc_amb, &ambient_strength, RL_SHADER_UNIFORM_FLOAT, 1);
-		rlSetUniform(loc_sky_h, &sky_horizon_color, RL_SHADER_UNIFORM_VEC3, 1);
-		rlSetUniform(loc_sky_z, &sky_zenith_color, RL_SHADER_UNIFORM_VEC3, 1);
-		rlSetUniform(loc_sky_i, &sky_intensity, RL_SHADER_UNIFORM_FLOAT, 1);
+		rlSetUniform(m_Loc.ambient_strength, &ambient_strength, RL_SHADER_UNIFORM_FLOAT, 1);
+		rlSetUniform(m_Loc.sky_horizon, &sky_horizon_color, RL_SHADER_UNIFORM_VEC3, 1);
+		rlSetUniform(m_Loc.sky_zenith, &sky_zenith_color, RL_SHADER_UNIFORM_VEC3, 1);
+		rlSetUniform(m_Loc.sky_intensity, &sky_intensity, RL_SHADER_UNIFORM_FLOAT, 1);
 
 		// Camera / lens uniforms (tonemap exposure + depth of field).
-		int loc_exposure = rlGetLocationUniform(m_ComputeShaderProgram, "exposure");
-		int loc_aperture = rlGetLocationUniform(m_ComputeShaderProgram, "aperture");
-		int loc_focus = rlGetLocationUniform(m_ComputeShaderProgram, "focus_distance");
-		rlSetUniform(loc_exposure, &exposure, RL_SHADER_UNIFORM_FLOAT, 1);
-		rlSetUniform(loc_aperture, &aperture, RL_SHADER_UNIFORM_FLOAT, 1);
-		rlSetUniform(loc_focus, &focus_distance, RL_SHADER_UNIFORM_FLOAT, 1);
-		int loc_firefly = rlGetLocationUniform(m_ComputeShaderProgram, "firefly_clamp");
-		rlSetUniform(loc_firefly, &firefly_clamp, RL_SHADER_UNIFORM_FLOAT, 1);
+		rlSetUniform(m_Loc.exposure, &exposure, RL_SHADER_UNIFORM_FLOAT, 1);
+		rlSetUniform(m_Loc.aperture, &aperture, RL_SHADER_UNIFORM_FLOAT, 1);
+		rlSetUniform(m_Loc.focus_distance, &focus_distance, RL_SHADER_UNIFORM_FLOAT, 1);
+		rlSetUniform(m_Loc.firefly_clamp, &firefly_clamp, RL_SHADER_UNIFORM_FLOAT, 1);
+
+		// Feature toggles (int 0/1) — must match the CPU integrator exactly.
+		int soft = enable_soft_shadows ? 1 : 0;
+		int refl = enable_reflections ? 1 : 0;
+		int refr = enable_refraction ? 1 : 0;
+		int indir = enable_indirect ? 1 : 0;
+		rlSetUniform(m_Loc.soft_shadows, &soft, RL_SHADER_UNIFORM_INT, 1);
+		rlSetUniform(m_Loc.enable_reflections, &refl, RL_SHADER_UNIFORM_INT, 1);
+		rlSetUniform(m_Loc.enable_refraction, &refr, RL_SHADER_UNIFORM_INT, 1);
+		rlSetUniform(m_Loc.enable_indirect, &indir, RL_SHADER_UNIFORM_INT, 1);
 
 		// 3. Bind the Output Texture
 		// We tell OpenGL: "Take m_OutputTexture, and let the Compute Shader write directly into its memory!"
@@ -1018,10 +1141,9 @@ namespace me::systems {
 		int band_rows = std::max(1, budget_px / std::max(1, m_Width));
 		band_rows = std::max(8, (band_rows / 8) * 8); // align to the 8x8 workgroup
 
-		int loc_row_off = rlGetLocationUniform(m_ComputeShaderProgram, "row_offset");
 		for (int y = 0; y < m_Height; y += band_rows) {
 			int rows = std::min(band_rows, m_Height - y);
-			rlSetUniform(loc_row_off, &y, RL_SHADER_UNIFORM_INT, 1);
+			rlSetUniform(m_Loc.row_offset, &y, RL_SHADER_UNIFORM_INT, 1);
 			rlComputeShaderDispatch(group_x, (unsigned int)std::ceil(rows / 8.0f), 1);
 		}
 

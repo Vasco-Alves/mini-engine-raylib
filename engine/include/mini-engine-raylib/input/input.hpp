@@ -34,6 +34,15 @@ namespace me::input {
 	void lock_cursor();
 	void unlock_cursor();
 
+	// Editor playtest gate. When CLOSED, every input query returns neutral
+	// (actions false, axes 0, mouse delta 0) and lock_cursor() is deferred so the
+	// cursor stays free — the editor closes it so a game running in play mode only
+	// receives input once the viewport is focused, and Escape can hand the mouse
+	// back for tweaking panels. Re-opening restores the game's own lock/unlock
+	// intent. The game runtime never closes it, so a shipped game is unaffected.
+	void set_input_gate(bool open);
+	bool is_input_gate_open();
+
 	// -------- actions (support multiple bindings) --------
 	void bind_action(const std::string& action, Key key);
 	void bind_action(const std::string& action, MouseButton button);

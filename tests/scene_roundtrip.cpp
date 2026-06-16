@@ -42,9 +42,8 @@ static nlohmann::ordered_json read_json(const std::string& path) {
 }
 
 static me::entity::entity_id find_by_tag(me::Registry& r, const std::string& name) {
-	auto& pool = r.view<TagComponent>();
-	for (size_t i = 0; i < pool.size(); ++i)
-		if (pool.components[i].name == name) return pool.entity_map[i];
+	for (auto [e, tag] : r.view<TagComponent>())
+		if (tag.name == name) return e;
 	return me::entity::null;
 }
 
@@ -70,9 +69,11 @@ int main() {
 	parent.add_component(MaterialComponent{ me::Color{ 200, 100, 50, 128 }, 0.3f, 0.8f, 1.25f, 0.4f, 1.7f });
 	parent.add_component(Model3DComponent{});       // empty handle -> no asset load
 	parent.add_component(LightComponent{ me::Color{ 255, 128, 0, 255 }, 2.5f });
-	parent.add_component(DirectionalLightComponent{ me::Color{ 100, 110, 120, 255 }, 0.75f });
+	parent.add_component(DirectionalLightComponent{ me::Color{ 100, 110, 120, 255 }, 0.75f, 1.0f,
+		/*cast_shadows*/ false, /*shadow_extent*/ 25.0f, /*shadow_resolution*/ 1024 });
 	parent.add_component(CameraComponent{});
-	parent.add_component(RigidBodyComponent{ RigidBodyType::Dynamic, 3.0f, 0.5f, 0.7f });
+	parent.add_component(RigidBodyComponent{ RigidBodyType::Dynamic, 3.0f, 0.5f, 0.7f, /*is_trigger*/ true,
+		/*freeze_rot_x*/ true, /*freeze_rot_y*/ false, /*freeze_rot_z*/ true });
 	parent.add_component(BoxColliderComponent{ { 1.5f, 2.5f, 3.5f }, false });
 	parent.add_component(SphereColliderComponent{ 2.25f, false });
 	parent.add_component(AudioListenerComponent{ true });
@@ -137,6 +138,12 @@ int main() {
 
 	auto* rb = reg2.try_get_component<RigidBodyComponent>(p);
 	CHECK(rb && rb->type == RigidBodyType::Dynamic && std::fabs(rb->mass - 3.0f) < 1e-4f);
+	CHECK(rb && rb->is_trigger);
+	CHECK(rb && rb->freeze_rot_x && !rb->freeze_rot_y && rb->freeze_rot_z);
+
+	auto* dl = reg2.try_get_component<DirectionalLightComponent>(p);
+	CHECK(dl && !dl->cast_shadows);
+	CHECK(dl && std::fabs(dl->shadow_extent - 25.0f) < 1e-4f && dl->shadow_resolution == 1024);
 
 	auto* scr = reg2.try_get_component<ScriptComponent>(p);
 	CHECK(scr && scr->scripts.size() == 1 && scr->scripts[0].path == "scripts/test.lua");

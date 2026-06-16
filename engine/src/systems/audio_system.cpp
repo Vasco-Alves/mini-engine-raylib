@@ -16,11 +16,10 @@ namespace me::systems {
 
 		// 2. Check the ECS: Is there an active Game Camera overriding it?
 		me::entity::entity_id listener_id = me::entity::null;
-		auto& listener_pool = registry.view<me::components::AudioListenerComponent>();
 
-		for (size_t i = 0; i < listener_pool.size(); ++i) {
-			if (listener_pool.components[i].active) {
-				listener_id = listener_pool.entity_map[i];
+		for (auto [e, listener] : registry.view<me::components::AudioListenerComponent>()) {
+			if (listener.active) {
+				listener_id = e;
 				break;
 			}
 		}
@@ -41,11 +40,10 @@ namespace me::systems {
 			}
 		}
 
-		// 3. Loop through all Audio Sources and check for Triggers
-		auto& source_pool = registry.view<me::components::AudioSourceComponent>();
-
-		for (size_t i = 0; i < source_pool.size(); ++i) {
-			auto& source = source_pool.components[i];
+		// 3. Loop through all Audio Sources and check for Triggers.
+		// TransformComponent is only needed for spatial sources, so it stays an
+		// optional try_get rather than a required component of the view.
+		for (auto [e, source] : registry.view<me::components::AudioSourceComponent>()) {
 
 			// Handle Play On Awake (ONLY if the game is actively playing)
 			if (me::is_playing() && source.play_on_awake && !source.has_played_awake) {
@@ -64,7 +62,6 @@ namespace me::systems {
 
 				// 4. Apply Spatial 3D Math using whichever listener_pos/right won
 				if (source.spatial) {
-					me::entity::entity_id e = source_pool.entity_map[i];
 					auto* source_transform = registry.try_get_component<me::components::TransformComponent>(e);
 
 					if (source_transform) {
@@ -98,10 +95,8 @@ namespace me::systems {
 		}
 
 		// 4. Loop through all Music Sources
-		auto& music_pool = registry.view<me::components::BackgroundMusicComponent>();
-
-		for (size_t i = 0; i < music_pool.size(); ++i) {
-			auto& music = music_pool.components[i];
+		for (auto [e, music] : registry.view<me::components::BackgroundMusicComponent>()) {
+			(void)e;
 
 			// Handle Play On Awake (only if the game is actively playing)
 			if (me::is_playing() && music.play_on_awake && !music.has_played_awake) {

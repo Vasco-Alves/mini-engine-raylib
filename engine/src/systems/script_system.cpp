@@ -3,11 +3,13 @@
 #include <iostream>
 #include <filesystem>
 #include <unordered_map>
+#include <vector>
 
 #include "mini-engine-raylib/core/engine.hpp"
 #include "mini-engine-raylib/ecs/script_component.hpp"
 #include "mini-engine-raylib/scripting/script_manager.hpp"
-#include "mini-engine-raylib/core/vfs.hpp" 
+#include "mini-engine-raylib/systems/physics_system.hpp"
+#include "mini-engine-raylib/core/vfs.hpp"
 #include "mini-engine-raylib/core/logger.hpp"
 #include <mini-ecs/registry.hpp>
 
@@ -15,9 +17,31 @@ namespace me::systems {
 
 	static float s_FileCheckTimer = 0.0f;
 
+	// Reused across frames to snapshot the script entities before updating them
+	// (see script_update) without re-allocating every frame.
+	static std::vector<me::entity::entity_id> s_script_entities;
+
+	// (Re)captures the script's callable surface from its environment — shared by
+	// first-time initialization and hot-reload so they can't drift apart.
+	static void cache_script_functions(me::components::ScriptInstance& script) {
+		script.update_fn = script.env["update"];
+		script.on_collision_enter_fn = script.env["on_collision_enter"];
+		script.on_collision_exit_fn = script.env["on_collision_exit"];
+		script.runtime_error_logged = false; // a fresh (re)load gets a fresh report
+	}
+
+	// Logs a script's runtime error once; repeats are suppressed until the file
+	// is edited (hot-reload resets the flag) so a broken update() doesn't flood
+	// the console at frame rate.
+	static void report_runtime_error(me::components::ScriptInstance& script, const char* where, const sol::error& err) {
+		if (script.runtime_error_logged) return;
+		script.runtime_error_logged = true;
+		me::logger::error("Runtime Error in " + script.path + " (" + where + "):\n" + err.what()
+			+ "\n(further errors from this script are suppressed until it is edited)");
+	}
+
 	void script_update(float dt) {
 		auto& reg = me::get_registry();
-		auto& pool = reg.view<me::components::ScriptComponent>();
 		sol::state& lua = me::scripting::get_state();
 
 		s_FileCheckTimer += dt;
@@ -30,11 +54,21 @@ namespace me::systems {
 		// Only allocate the map if checking files this frame
 		std::unordered_map<std::string, std::filesystem::file_time_type> cached_timestamps;
 
-		for (int i = (int)pool.size() - 1; i >= 0; --i) {
-			auto e = pool.entity_map[i];
-			auto& script_comp = pool.components[i];
+		// Snapshot the script entities up front: a script's start()/update() can
+		// spawn or destroy entities, which mutates (and may reallocate) the
+		// ScriptComponent pool mid-iteration. Iterating ids off a snapshot keeps
+		// us off invalidated storage; entities created this frame run next frame.
+		s_script_entities.clear();
+		for (auto [e, sc] : reg.view<me::components::ScriptComponent>()) {
+			(void)sc;
+			s_script_entities.push_back(e);
+		}
 
-			for (auto& script : script_comp.scripts) {
+		for (me::entity::entity_id e : s_script_entities) {
+			auto* script_comp = reg.try_get_component<me::components::ScriptComponent>(e);
+			if (!script_comp) continue;
+
+			for (auto& script : script_comp->scripts) {
 
 				// ==========================================
 				// 1. FIRST-TIME INITIALIZATION
@@ -52,10 +86,10 @@ namespace me::systems {
 
 						sol::protected_function start_fn = script.env["start"];
 						if (start_fn.valid()) {
-							start_fn(me::Entity{ e, &reg });
+							start_fn(reg.get_entity(e));
 						}
 
-						script.update_fn = script.env["update"];
+						cache_script_functions(script);
 						script.last_modified = std::filesystem::last_write_time(physical_path);
 
 					} catch (const sol::error& err) {
@@ -88,7 +122,7 @@ namespace me::systems {
 
 						try {
 							lua.script_file(physical_path, script.env);
-							script.update_fn = script.env["update"];
+							cache_script_functions(script);
 							script.last_modified = current_time;
 						} catch (const sol::error& err) {
 							me::logger::error("Syntax Error in " + script.path + ":\n" + err.what());
@@ -102,14 +136,51 @@ namespace me::systems {
 				// ==========================================
 				// Notice how this loop does ZERO string comparisons and ZERO disk reads!
 				if (script.started && script.update_fn.valid()) {
-					auto result = script.update_fn(me::Entity{ e, &reg }, dt);
+					auto result = script.update_fn(reg.get_entity(e), dt);
 
 					if (!result.valid()) {
 						sol::error err = result;
-						me::logger::error("Runtime Error in " + script.path + ":\n" + err.what());
+						report_runtime_error(script, "update", err);
 					}
 				}
 			}
+		}
+	}
+
+	// Calls one side of a contact event: every script on `self_id` that defines
+	// the matching callback gets (self, other). The other entity may already be
+	// dead (a body removal reports its last contacts one step later) — its handle
+	// is passed anyway and simply answers is_valid() == false.
+	static void dispatch_collision_side(me::Registry& reg,
+		me::entity::entity_id self_id, me::entity::entity_id other_id, bool entered) {
+		if (!reg.is_alive(self_id)) return;
+		auto* sc = reg.try_get_component<me::components::ScriptComponent>(self_id);
+		if (!sc) return;
+
+		me::Entity self = reg.get_entity(self_id);
+		me::Entity other = reg.get_entity(other_id);
+
+		for (auto& script : sc->scripts) {
+			if (!script.started) continue;
+			auto& fn = entered ? script.on_collision_enter_fn : script.on_collision_exit_fn;
+			if (!fn.valid()) continue;
+
+			auto result = fn(self, other);
+			if (!result.valid()) {
+				sol::error err = result;
+				report_runtime_error(script, entered ? "on_collision_enter" : "on_collision_exit", err);
+			}
+		}
+	}
+
+	void script_dispatch_collisions() {
+		std::vector<me::physics::ContactEvent> events = me::physics::consume_contact_events();
+		if (events.empty()) return;
+
+		auto& reg = me::get_registry();
+		for (const auto& ev : events) {
+			dispatch_collision_side(reg, ev.a, ev.b, ev.entered);
+			dispatch_collision_side(reg, ev.b, ev.a, ev.entered);
 		}
 	}
 }
