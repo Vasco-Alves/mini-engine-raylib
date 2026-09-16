@@ -54,6 +54,9 @@ namespace editor {
 
 		rlImGuiSetup(true);
 		ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+		// A plain click (no drag) on a numeric field starts typing, as in Blender,
+		// instead of requiring a double-click; dragging still scrubs the value.
+		ImGui::GetIO().ConfigDragClickToInputText = true;
 
 		// Explicit-save layout model: disable ImGui's continuous imgui.ini
 		// autosave. The layout you see on startup is the last one you SAVED
@@ -77,7 +80,7 @@ namespace editor {
 			m_RecentProjects.erase(std::remove(m_RecentProjects.begin(), m_RecentProjects.end(), p), m_RecentProjects.end());
 			m_HubPanel.set_recent_projects(m_RecentProjects);
 			save_engine_config();
-		};
+			};
 
 		load_engine_config();
 		m_ViewportPanel.on_start();
@@ -300,7 +303,7 @@ namespace editor {
 		// scene CameraComponent while playing (falling back to the editor cam if the
 		// scene has none, so the view never goes black).
 		const me::components::TransformComponent* view_t = &m_EditorCameraTransform;
-		const me::components::CameraComponent*    view_c = &m_EditorCamera;
+		const me::components::CameraComponent* view_c = &m_EditorCamera;
 		if (m_SceneState == SceneState::Play) {
 			auto& reg = me::get_registry();
 			for (auto [e, cam] : reg.view<me::components::CameraComponent>()) {
@@ -313,9 +316,8 @@ namespace editor {
 			}
 		}
 
-		// 1. Shadow pass — binds its own depth framebuffer, so it must run BEFORE
-		// the viewport texture is bound. Skipped in Render mode (the path tracer
-		// owns the view and computes its own shadows).
+		// 1. Shadow pass — binds its own depth framebuffer, so it must run BEFORE the viewport texture is bound. 
+		// Skipped in Render mode (the path tracer owns the view and computes its own shadows).
 		if (m_SceneState != SceneState::Render)
 			me::render::render_shadows({ view_t->position.x, view_t->position.y, view_t->position.z });
 
@@ -914,7 +916,7 @@ namespace editor {
 		sun.add_component(me::components::TagComponent{ "Directional Light" });
 		sun.add_component(me::components::TransformComponent{
 			{0.0f, 20.0f, 0.0f},   // Position
-			{-45.0f, 45.0f, 0.0f}, // Rotation
+			{35.0f, 135.0f, 0.0f}, // Rotation: pitch > 0 aims down; lights the default view from the front-left
 			{1.0f, 1.0f, 1.0f}     // Scale
 			});
 		sun.add_component(me::components::DirectionalLightComponent{ me::Color::white, 1.0f });
@@ -922,7 +924,7 @@ namespace editor {
 		// Create a simple Cube
 		auto cube = me::get_registry().create_entity();
 		cube.add_component(me::components::TagComponent{ "Cube" });
-		cube.add_component(me::components::TransformComponent{ {0.0f, 0.05f, 0.0f}, {0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f} });
+		cube.add_component(me::components::TransformComponent{ {0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f} });
 		cube.add_component(me::components::Shape3DComponent{ me::components::Shape3DComponent::Cube, me::Color::white });
 
 		// Grid of colorfull balls
@@ -1042,6 +1044,7 @@ namespace editor {
 		} else {
 			int refresh = GetMonitorRefreshRate(GetCurrentMonitor());
 			me::set_target_fps(refresh > 0 ? refresh : 60);
+			// me::set_target_fps(0); // Uncapped edit mode: enable only to measure raw viewport FPS (stress tests)
 		}
 	}
 

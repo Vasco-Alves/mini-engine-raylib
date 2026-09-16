@@ -230,9 +230,13 @@ namespace editor {
 
 		// --- Camera ---
 		me::components::CameraComponent m_EditorCamera;
+		// Three-quarter view of the origin, like Blender's default camera: it shows
+		// two sides and the top of an object instead of a flat front face. The
+		// rotation (atan(5/10) down, 225 deg) aims exactly at the default target, so
+		// the view doesn't jump when flying starts.
 		me::components::TransformComponent m_EditorCameraTransform = {
-			{0.0f, 5.0f, 10.0f},
-			{-25.0f, 180.0f, 0.0f},
+			{7.07f, 5.0f, 7.07f},
+			{-26.57f, 225.0f, 0.0f},
 			{1.0f, 1.0f, 1.0f}
 		};
 		bool m_IsFlying = false;

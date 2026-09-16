@@ -60,7 +60,9 @@ namespace me::systems {
 	public:
 		// --- Viewport Settings ---
 		RenderBackend current_backend = RenderBackend::GPU;
-		bool  accumulate = false;
+		// On by default: a still view converges progressively, and on_update
+		// restarts the accumulation whenever the camera moves. Off = live, noisy preview.
+		bool  accumulate = true;
 		int   preview_samples = 50;
 		float resolution_scale = 0.5f;
 
@@ -182,6 +184,13 @@ namespace me::systems {
 
 		// BVH — rebuilt on reset_accumulation(registry)
 		me::raytracing::BVH m_BVH;
+
+		// Camera seen by the previous on_update. Any change restarts the
+		// accumulation (without rebuilding the BVH), so navigating starts over.
+		Vector3 m_LastEye{};
+		Vector3 m_LastTarget{};
+		Vector3 m_LastUp{};
+		float   m_LastFov = -1.0f;
 
 		// --- Real-time rebuild skipping (RT Play) ---
 		// render_realtime_frame rebuilds the BVH + GPU buffers only when the scene

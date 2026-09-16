@@ -1,0 +1,10 @@
+#pragma once
+
+// GENERATED at configure time from version.hpp.in into the build tree — never edit
+// the generated copy. The single source of truth is the root CMakeLists.txt
+// `project(... VERSION ...)`: bump it there (plus a CHANGELOG.md entry in the same
+// commit) and the editor's About text and the CPack archive name follow together.
+#define ME_VERSION_MAJOR @CMAKE_PROJECT_VERSION_MAJOR@
+#define ME_VERSION_MINOR @CMAKE_PROJECT_VERSION_MINOR@
+#define ME_VERSION_PATCH @CMAKE_PROJECT_VERSION_PATCH@
+#define ME_VERSION_STRING "@CMAKE_PROJECT_VERSION@"

@@ -26,9 +26,18 @@ if(MSVC)
     set_source_files_properties("src/scripting/script_manager.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj")
 endif()
 
+# Version header, generated from the root project(VERSION ...) so there is exactly
+# one place to bump it. Written into the build tree, never the source tree.
+configure_file(
+    "include/mini-engine-raylib/core/version.hpp.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/mini-engine-raylib/core/version.hpp"
+    @ONLY
+)
+
 # 4. Setup Include Directories
 target_include_directories(engine PUBLIC 
     "include" 
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
     "${CMAKE_SOURCE_DIR}/vendor/sol3/include"
     "${CMAKE_SOURCE_DIR}/vendor/lua/src"
     "${CMAKE_SOURCE_DIR}/vendor/JoltPhysics"

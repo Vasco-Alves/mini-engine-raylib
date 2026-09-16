@@ -275,6 +275,20 @@ namespace me::systems {
 		// any future code path inside trace_ray.
 		m_ActiveRegistry = &registry;
 
+		// Restart the accumulation when the camera moves: samples taken from another
+		// viewpoint would smear into the image. The BVH is left untouched.
+		const Vector3 eye = cam_transform.world_position();
+		const Vector3 target = { camera.target.x, camera.target.y, camera.target.z };
+		const Vector3 up = { camera.up.x, camera.up.y, camera.up.z };
+		if (camera.fov != m_LastFov || !Vector3Equals(eye, m_LastEye) ||
+			!Vector3Equals(target, m_LastTarget) || !Vector3Equals(up, m_LastUp)) {
+			m_LastEye = eye;
+			m_LastTarget = target;
+			m_LastUp = up;
+			m_LastFov = camera.fov;
+			reset_accumulation();
+		}
+
 		if (!accumulate) {
 			// Real-time noisy mode: reset pixel history every frame.
 			// Reuse the existing BVH — no need to rebuild.
@@ -304,8 +318,7 @@ namespace me::systems {
 					// Generate the QMC anti-aliased camera ray.
 					// m_FrameCount drives the Halton sequence (starts at 1, never 0,
 					// which avoids the degenerate (0,0) sample at the pixel center).
-					me::raytracing::Ray ray = generate_camera_ray(
-						x, y, m_Width, m_Height, camera, cam_transform, m_FrameCount, seed);
+					me::raytracing::Ray ray = generate_camera_ray(x, y, m_Width, m_Height, camera, cam_transform, m_FrameCount, seed);
 
 					// Trace and accumulate.
 					Vector3 light = trace_ray(ray, 0, seed);
@@ -390,8 +403,7 @@ namespace me::systems {
 		// World-space eye (a child camera's `position` is parent-relative).
 		Vector3 eye = cam_transform.world_position();
 
-		Vector3 fwd = Vector3Normalize(Vector3Subtract(
-			{ camera.target.x, camera.target.y, camera.target.z }, eye));
+		Vector3 fwd = Vector3Normalize(Vector3Subtract({ camera.target.x, camera.target.y, camera.target.z }, eye));
 		Vector3 up = Vector3Normalize({ camera.up.x, camera.up.y, camera.up.z });
 		Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, up));
 		Vector3 true_up = Vector3CrossProduct(right, fwd);
@@ -400,7 +412,7 @@ namespace me::systems {
 			fwd.x + right.x * vx + true_up.x * vy,
 			fwd.y + right.y * vx + true_up.y * vy,
 			fwd.z + right.z * vx + true_up.z * vy
-		});
+			});
 
 		// Pinhole camera unless an aperture is set.
 		if (aperture <= 0.0f)
@@ -414,9 +426,7 @@ namespace me::systems {
 		Vector3 focal_point = Vector3Add(eye, Vector3Scale(dir, focus_distance));
 		float lens_r = aperture * std::sqrt(me::raytracing::random_float(seed));
 		float lens_a = 2.0f * PI * me::raytracing::random_float(seed);
-		Vector3 lens_offset = Vector3Add(
-			Vector3Scale(right, std::cos(lens_a) * lens_r),
-			Vector3Scale(true_up, std::sin(lens_a) * lens_r));
+		Vector3 lens_offset = Vector3Add(Vector3Scale(right, std::cos(lens_a) * lens_r), Vector3Scale(true_up, std::sin(lens_a) * lens_r));
 		Vector3 new_origin = Vector3Add(eye, lens_offset);
 		return { new_origin, Vector3Normalize(Vector3Subtract(focal_point, new_origin)) };
 	}
@@ -811,7 +821,7 @@ namespace me::systems {
 		auto fold = [&h](const void* data, size_t bytes) {
 			const unsigned char* p = static_cast<const unsigned char*>(data);
 			for (size_t i = 0; i < bytes; ++i) { h ^= p[i]; h *= 1099511628211ull; }
-		};
+			};
 		// view<T>() iterates the T pool in its native (entity_map) order, so folding
 		// each entity id + component struct is equivalent to the old whole-array
 		// hash: still sensitive to any field change, the entity set, and reordering.
@@ -823,7 +833,7 @@ namespace me::systems {
 				++n;
 			}
 			fold(&n, sizeof(n));
-		};
+			};
 		using namespace me::components;
 		hash_pool(registry.view<TransformComponent>());
 		hash_pool(registry.view<Shape3DComponent>());
@@ -1051,7 +1061,7 @@ namespace me::systems {
 		auto up = [](unsigned int& ssbo, unsigned int& cap, const auto& vec, const void* dummy, unsigned int dummy_size) {
 			if (vec.empty()) upload_ssbo(ssbo, cap, dummy, dummy_size);
 			else upload_ssbo(ssbo, cap, vec.data(), static_cast<unsigned int>(vec.size() * sizeof(vec[0])));
-		};
+			};
 
 		up(m_ssboNodes, m_capNodes, m_GPUNodes, &dn, sizeof(dn));
 		up(m_ssboTriangles, m_capTriangles, m_GPUTriangles, &dt, sizeof(dt));

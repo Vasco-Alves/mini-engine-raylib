@@ -2,7 +2,7 @@
 
 **A small scene engine built on [raylib](https://www.raylib.com/). Build a scene once — press Play to run it as a game, or press Render to path-trace it into stills and animations.**
 
-> Version 1.1.0 · C++23 · MIT · Windows (primary), Linux (builds, lightly tested), macOS (experimental: CPU path tracing only — Apple's OpenGL has no compute shaders)
+> Version 1.1.1 · C++23 · MIT · Windows (primary), Linux (builds, lightly tested), macOS (experimental: CPU path tracing only — Apple's OpenGL has no compute shaders)
 
 ![Editor](docs/images/editor_hero.png)
 

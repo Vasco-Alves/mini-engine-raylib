@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.1] - 2026-09-16
+
+A usability pass driven by a step-by-step comparison of the render workflow against Blender: common operations take fewer actions, and the render preview now converges on its own.
+
+### Added
+- **Quick primitive creation**: right-clicking empty space in the Scene Hierarchy now offers Cube, Sphere and Plane under *3D Primitive*, next to *Create Empty Entity*. Each is created with its shape attached, selected, and undoable in one step — previously it took an empty entity, *Add Component* and picking the shape type.
+
+### Changed
+- **The render preview accumulates by default** and restarts whenever the camera moves: a still view converges to the preview sample count, and navigating starts over instead of smearing samples from the old viewpoint. A camera move does not rebuild the BVH. *Accumulate Data* still switches to the live, noisy preview.
+- **Single click to type into numeric fields** (ImGui `ConfigDragClickToInputText`): a plain click starts text entry, as in Blender; dragging still scrubs the value.
+- **Three-quarter default editor camera**: the viewport opens looking at the origin from a 45° angle, like Blender's default camera, instead of straight from the front. Its rotation now matches its initial target, so the view no longer jumps when flying starts.
+- **New scenes place the cube exactly at the origin** (it was at y = 0.05).
+- **The version is defined once**: `version.hpp` is generated from the root `project(VERSION ...)`, so the editor's About text and the release archive name always agree.
+
+### Fixed
+- **New scenes lit from below**: the default directional light had its pitch sign inverted and pointed upward. It now shines down at 35° from the front-left of the default view.
+
 ## [1.1.0] - 2026-06-13
 
 The gameplay update. The Lua API grows from a demo-sized surface into a real gameplay API — menus, levels, spawning, collision-driven logic — Play mode gains real-time shadows, and the path tracer becomes a shippable renderer (real-time, retro-resolution) with controls over the noise/speed tradeoff. Exported games can now both *be* games and look like them.
