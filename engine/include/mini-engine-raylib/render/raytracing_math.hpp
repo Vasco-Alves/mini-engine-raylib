@@ -1,6 +1,7 @@
 #pragma once
 #include <raymath.h>
 #include <cfloat>
+#include <cstdint>
 #include <algorithm>
 #include <cmath>
 

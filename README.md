@@ -61,7 +61,8 @@ editor/     Executable `editor` — the ImGui tool built on top of `engine`
 game/       Executable `game` — the shipped game runtime (no editor, no ImGui);
             "File > Export Game..." packages it with a project into a standalone game
 docs/       Documentation (see ARCHITECTURE.md)
-tests/      Headless tests (scene round-trip) + dev tools (shader compile check)
+tests/      Headless tests (serialization, animation, Lua API, physics events)
+            + dev tools (shader compile check, BVH benchmark)
 vendor/     Third-party dependencies (raylib, imgui, lua, sol3, jolt, json, mini-ecs, …)
 ```
 
@@ -74,6 +75,14 @@ The editor and the game runtime are two front-ends over the same engine API.
 
 Requires a C++23 compiler, CMake ≥ 3.5 (3.21+ recommended), and a GPU/driver with **OpenGL 4.3** (raylib requests a 4.3 context at startup; the GPU path-tracer backend uses compute shaders). The build statically links the MSVC runtime and pulls every dependency from `vendor/` via `add_subdirectory`, so make sure the submodules are present.
 
+On Linux, raylib also needs the X11 and OpenGL development packages, and the CPU path tracer only runs multithreaded when TBB is installed (without it the build still succeeds and that backend runs on one thread). On Debian/Ubuntu:
+
+```bash
+sudo apt install build-essential cmake ninja-build git \
+    libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev \
+    libtbb-dev
+```
+
 ```bash
 git clone --recursive https://github.com/Vasco-Alves/mini-engine-raylib.git
 cd mini-engine-raylib
@@ -83,7 +92,7 @@ cd mini-engine-raylib
 ### With CMake presets (recommended)
 
 ```bash
-cmake --preset x64-debug        # or: x64-release, linux-debug
+cmake --preset x64-debug        # or: x64-release, linux-debug, linux-release
 cmake --build --preset x64-debug
 ```
 
@@ -93,12 +102,13 @@ Presets use the Ninja generator. The editor builds as **`MiniEngine`** (plus the
 
 ### Tests
 
-A headless serialization round-trip test builds as the `scene_roundtrip_test` target (and is registered with CTest):
+Four headless tests — scene serialization round-trip, animation evaluation, the gameplay Lua API and physics events — are registered with CTest. After building a preset, run them with the matching test preset:
 
 ```bash
-cmake --build build --target scene_roundtrip_test
-ctest --test-dir build -C Debug          # or just run the scene_roundtrip_test executable
+ctest --preset x64-debug
 ```
+
+Two dev tools build alongside them but stay out of CTest: `shader_check` compiles the raytracer compute shader (it opens a brief GL window), and `bvh_bench` times the path tracer's BVH against an exhaustive search over the same primitives. Run the benchmark from a Release build: `out/build/x64-release/bin/bvh_bench`.
 
 ## Running
 

@@ -8,6 +8,8 @@ A usability pass driven by a step-by-step comparison of the render workflow agai
 
 ### Added
 - **Quick primitive creation**: right-clicking empty space in the Scene Hierarchy now offers Cube, Sphere and Plane under *3D Primitive*, next to *Create Empty Entity*. Each is created with its shape attached, selected, and undoable in one step — previously it took an empty entity, *Add Component* and picking the shape type.
+- **BVH benchmark** (`bvh_bench`, dev tool): times the path tracer's triangle and object BVHs against an exhaustive search over the same primitives — build time, tree depth and time per ray — and checks that both find the same hits. It reports timings, so it stays out of CTest; run the Release build.
+- **Build and test presets**: `cmake --build --preset <name>` and `ctest --preset <name>` now exist for every configure preset, as the README already documented.
 
 ### Changed
 - **The render preview accumulates by default** and restarts whenever the camera moves: a still view converges to the preview sample count, and navigating starts over instead of smearing samples from the old viewpoint. A camera move does not rebuild the BVH. *Accumulate Data* still switches to the live, noisy preview.
@@ -18,6 +20,10 @@ A usability pass driven by a step-by-step comparison of the render workflow agai
 
 ### Fixed
 - **New scenes lit from below**: the default directional light had its pitch sign inverted and pointed upward. It now shines down at 35° from the front-left of the default view.
+- **Linux build**: `raytracing_math.hpp` used `uint32_t` without `<cstdint>`, and with the TBB headers installed libstdc++ runs `std::execution` on oneTBB, which the engine never linked. TBB is now linked when found; otherwise libstdc++ is pinned to its serial backend, so the build never depends on it.
+- **Demo dragon missing on Linux**: the scene referenced `dragon.obj` while the file was `Dragon.obj`, which only a case-insensitive file system forgives. The file is now lowercase.
+- **LICENSE** still carried the template placeholders instead of the copyright holder.
+- **README test instructions** pointed at a stale build folder and listed one of the four tests.
 
 ## [1.1.0] - 2026-06-13
 
