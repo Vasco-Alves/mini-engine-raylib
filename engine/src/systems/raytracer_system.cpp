@@ -71,6 +71,7 @@ namespace me::systems {
 
 			if (m_ComputeShaderProgram != 0) {
 				cache_gpu_uniform_locations();
+				recreate_accum_texture();
 				me::logger::info("Compute Shader compiled and linked successfully!");
 			} else {
 				me::logger::error("Failed to link compute shader program!");
@@ -110,10 +111,23 @@ namespace me::systems {
 		m_Loc.enable_indirect = loc("enable_indirect");
 	}
 
+	void RaytracerSystem::recreate_accum_texture() {
+		if (m_AccumTextureId != 0) {
+			rlUnloadTexture(m_AccumTextureId);
+			m_AccumTextureId = 0;
+		}
+		if (m_ComputeShaderProgram == 0) return;
+		m_AccumTextureId = rlLoadTexture(nullptr, m_Width, m_Height, RL_PIXELFORMAT_UNCOMPRESSED_R32G32B32A32, 1);
+	}
+
 	void RaytracerSystem::on_stop() {
 		if (m_OutputTexture.id != 0) {
 			UnloadTexture(m_OutputTexture);
 			m_OutputTexture.id = 0;
+		}
+		if (m_AccumTextureId != 0) {
+			rlUnloadTexture(m_AccumTextureId);
+			m_AccumTextureId = 0;
 		}
 
 		if (m_ComputeShaderProgram != 0)
@@ -163,6 +177,7 @@ namespace me::systems {
 		Image img = GenImageColor(width, height, ::BLANK);
 		m_OutputTexture = LoadTextureFromImage(img);
 		UnloadImage(img);
+		recreate_accum_texture();
 
 		m_FrameCount = 1;
 	}
@@ -179,10 +194,7 @@ namespace me::systems {
 		}
 	}
 
-	void RaytracerSystem::render_realtime_frame(me::Registry& registry,
-		const me::components::CameraComponent& camera,
-		const me::components::TransformComponent& cam_transform) {
-
+	void RaytracerSystem::render_realtime_frame(me::Registry& registry, const me::components::CameraComponent& camera, const me::components::TransformComponent& cam_transform) {
 		// Borrow the progressive-accumulation machinery for an in-frame burst:
 		// N samples accumulate, the frame is done, and the next frame starts
 		// fresh because the scene has moved.
@@ -190,9 +202,7 @@ namespace me::systems {
 		const int  saved_target = preview_samples;
 		const int  samples = std::max(1, play_samples_per_frame);
 		accumulate = true;
-		// on_update early-outs once m_FrameCount reaches the target, and the
-		// counter sits at k+1 after k samples — +1 so all N samples render.
-		preview_samples = samples + 1;
+		preview_samples = samples;
 
 		// With a locked pattern the per-pixel seed salt restarts identically
 		// every frame (it still varies across the N samples *within* a frame),
@@ -297,7 +307,7 @@ namespace me::systems {
 			reset_accumulation();
 		}
 
-		if (accumulate && m_FrameCount >= preview_samples) {
+		if (accumulate && get_sample_count() >= preview_samples) {
 			m_ActiveRegistry = nullptr;
 			return; // We've reached target quality — let the CPU rest.
 		}
@@ -358,10 +368,11 @@ namespace me::systems {
 					avg.y = std::sqrt(std::max(0.0f, avg.y));
 					avg.z = std::sqrt(std::max(0.0f, avg.z));
 
+					// Round to nearest, as the GPU's store to its rgba8 image does.
 					m_PixelData[index] = ::Color{
-						static_cast<unsigned char>(std::clamp(avg.x, 0.0f, 1.0f) * 255.0f),
-						static_cast<unsigned char>(std::clamp(avg.y, 0.0f, 1.0f) * 255.0f),
-						static_cast<unsigned char>(std::clamp(avg.z, 0.0f, 1.0f) * 255.0f),
+						static_cast<unsigned char>(std::clamp(avg.x, 0.0f, 1.0f) * 255.0f + 0.5f),
+						static_cast<unsigned char>(std::clamp(avg.y, 0.0f, 1.0f) * 255.0f + 0.5f),
+						static_cast<unsigned char>(std::clamp(avg.z, 0.0f, 1.0f) * 255.0f + 0.5f),
 						255
 					};
 				}
@@ -782,7 +793,10 @@ namespace me::systems {
 			// though the single bounce ray went one way.
 			float sw = enable_reflections ? (1.0f - p.roughness) : 0.0f;
 			float dw = enable_indirect ? p.roughness : 0.0f;
-			float bw = sw + dw * 0.5f;
+			// Cosine-weighted diffuse sampling cancels the BRDF's 1/pi and the
+			// cosine term, so a matte bounce carries the full albedo — the same
+			// fraction the direct term uses. Anything less darkens indirect light.
+			float bw = sw + dw;
 
 			// FIX: Only smooth plastics reflect pure white. Everything else uses base_color!
 			float white_blend = (1.0f - p.metallic) * (1.0f - p.roughness);
@@ -1136,6 +1150,8 @@ namespace me::systems {
 		// 3. Bind the Output Texture
 		// We tell OpenGL: "Take m_OutputTexture, and let the Compute Shader write directly into its memory!"
 		rlBindImageTexture(m_OutputTexture.id, 0, m_OutputTexture.format, false);
+		// ...and the float running sum it tonemaps from.
+		rlBindImageTexture(m_AccumTextureId, 1, RL_PIXELFORMAT_UNCOMPRESSED_R32G32B32A32, false);
 
 		// 4. DISPATCH — in horizontal row bands, never one giant dispatch.
 		// A single full-image dispatch at export resolutions (with high bounce

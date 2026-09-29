@@ -2,13 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.1.1] - 2026-09-16
+## [1.1.1] - 2026-09-30
 
 A usability pass driven by a step-by-step comparison of the render workflow against Blender: common operations take fewer actions, and the render preview now converges on its own.
 
 ### Added
 - **Quick primitive creation**: right-clicking empty space in the Scene Hierarchy now offers Cube, Sphere and Plane under *3D Primitive*, next to *Create Empty Entity*. Each is created with its shape attached, selected, and undoable in one step — previously it took an empty entity, *Add Component* and picking the shape type.
 - **BVH benchmark** (`bvh_bench`, dev tool): times the path tracer's triangle and object BVHs against an exhaustive search over the same primitives — build time, tree depth and time per ray — and checks that both find the same hits. It reports timings, so it stays out of CTest; run the Release build.
+- **Render benchmark** (`render_bench`, dev tool): renders a scene file headlessly through the path tracer — the same settings, accumulation loop and PNG writer as *Export to PNG*, from the editor's default camera — and reports the time per sample on the CPU or GPU backend. Used for reproducible figures and backend comparisons; out of CTest, like `bvh_bench`.
 - **Build and test presets**: `cmake --build --preset <name>` and `ctest --preset <name>` now exist for every configure preset, as the README already documented.
 
 ### Changed
@@ -16,9 +17,14 @@ A usability pass driven by a step-by-step comparison of the render workflow agai
 - **Single click to type into numeric fields** (ImGui `ConfigDragClickToInputText`): a plain click starts text entry, as in Blender; dragging still scrubs the value.
 - **Three-quarter default editor camera**: the viewport opens looking at the origin from a 45° angle, like Blender's default camera, instead of straight from the front. Its rotation now matches its initial target, so the view no longer jumps when flying starts.
 - **New scenes place the cube exactly at the origin** (it was at y = 0.05).
+- **Faster GPU path tracing, now traversing like the CPU**: the compute shader pushed both BVH children unordered, traced shadow rays past the light, and inverted a 4×4 matrix on every sphere, plane, cube and model hit to recover the world distance. It now visits the nearer child first, bounds each model's triangle BVH by the closest hit so far and each shadow ray by the light's distance, and converts local hit distances with the transform's scale — as the CPU backend does. Same images; at 1920×1080 and 8 bounces the demo scene drops from 473 to 199 ms per sample, the Cornell box from 181 to 146.
+- **Demo assets with a known origin**: the jump sound is now synthesized by `tools/make_jump_sound.py` (mono, 0.32 s) instead of a downloaded effect whose source was not recorded, and the README credits the Stanford Dragon and states its terms.
 - **The version is defined once**: `version.hpp` is generated from the root `project(VERSION ...)`, so the editor's About text and the release archive name always agree.
 
 ### Fixed
+- **Renders took one sample fewer than requested**: the raytracer's counter holds the index of the next sample, one ahead of the samples in the image, and the export, the animation render and the viewport target compared against it — *Samples = N* accumulated N − 1, and the minimum export of 2 was really 1. They now stop at exactly N, the progress counters show the samples taken, and 1-sample exports are allowed. RT Play's internal +1 workaround is gone.
+- **Indirect light came out half as bright as it should**: a diffuse bounce was multiplied by the surface albedo *and* by an unexplained 0.5, while the direct term used the albedo alone. Cosine-weighted sampling already cancels the BRDF's 1/π and the cosine term, so the bounce weight is the albedo: the extra factor darkened every indirectly lit surface, and halved again with each further bounce. Both backends now carry the full albedo, so bounced light, colour bleeding and the light reaching surfaces that never see a lamp are brighter (bright scenes may want a lower Exposure than the 0.6 default).
+- **GPU accumulation drifted from the CPU and stalled**: the compute shader kept its running average in the 8-bit output image, after tonemapping. Averaging tonemapped values darkened noisy, indirectly lit regions (the curve is non-linear), and once a new sample moved the average by less than half an 8-bit step — after a few hundred samples — the image stopped refining. The GPU now sums linear radiance in an RGBA32F image and tonemaps the average, like the CPU path, which now also rounds to the nearest 8-bit value as the GPU store does: the two backends agree to within rounding.
 - **New scenes lit from below**: the default directional light had its pitch sign inverted and pointed upward. It now shines down at 35° from the front-left of the default view.
 - **Linux build**: `raytracing_math.hpp` used `uint32_t` without `<cstdint>`, and with the TBB headers installed libstdc++ runs `std::execution` on oneTBB, which the engine never linked. TBB is now linked when found; otherwise libstdc++ is pinned to its serial backend, so the build never depends on it.
 - **Demo dragon missing on Linux**: the scene referenced `dragon.obj` while the file was `Dragon.obj`, which only a case-insensitive file system forgives. The file is now lowercase.

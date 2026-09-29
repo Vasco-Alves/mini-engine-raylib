@@ -63,6 +63,7 @@ game/       Executable `game` — the shipped game runtime (no editor, no ImGui)
 docs/       Documentation (see ARCHITECTURE.md)
 tests/      Headless tests (serialization, animation, Lua API, physics events)
             + dev tools (shader compile check, BVH benchmark)
+tools/      Asset scripts (the synthesized demo jump sound)
 vendor/     Third-party dependencies (raylib, imgui, lua, sol3, jolt, json, mini-ecs, …)
 ```
 
@@ -108,7 +109,7 @@ Four headless tests — scene serialization round-trip, animation evaluation, th
 ctest --preset x64-debug
 ```
 
-Two dev tools build alongside them but stay out of CTest: `shader_check` compiles the raytracer compute shader (it opens a brief GL window), and `bvh_bench` times the path tracer's BVH against an exhaustive search over the same primitives. Run the benchmark from a Release build: `out/build/x64-release/bin/bvh_bench`.
+Three dev tools build alongside them but stay out of CTest: `shader_check` compiles the raytracer compute shader (it opens a brief GL window), `bvh_bench` times the path tracer's BVH against an exhaustive search over the same primitives, and `render_bench` renders a scene file headlessly through the path tracer, as *Export to PNG* does, and reports the time per sample on either backend (`render_bench scene.json out.png --samples 256 --backend cpu`; run it without arguments for the options). Run the benchmarks from a Release build: `out/build/x64-release/bin/`.
 
 ## Running
 
@@ -218,3 +219,5 @@ This produces `mini-engine-raylib-<version>-win64.zip` containing the editor, th
 ## License
 
 The engine is released under the [MIT License](LICENSE). Vendored dependencies retain their own licenses (see each folder under `vendor/`).
+
+The demo dragon (`editor/assets/demo/models/dragon.obj`, copied into every new project) is a reduced, 100,000-triangle version of the Stanford Dragon from the [Stanford 3D Scanning Repository](https://graphics.stanford.edu/data/3Dscanrep/), courtesy of the Stanford University Computer Graphics Laboratory. It is **not** covered by the MIT License: the repository allows research use and free redistribution, and asks that published images made with it credit the Stanford Computer Graphics Laboratory, but it may not be used commercially or appear in a product for sale without Stanford's permission. Replace it before shipping a commercial game.

@@ -53,7 +53,10 @@ namespace me::systems {
 		// (useful for the non-accumulation real-time noisy mode).
 		void reset_accumulation(me::Registry* registry = nullptr);
 
-		int  get_accumulated_frames() const { return m_FrameCount; }
+		// Samples per pixel accumulated so far. m_FrameCount is the 1-based index
+		// of the NEXT sample (it drives the Halton jitter and the running average),
+		// so it runs one ahead of the samples actually in the image.
+		int  get_sample_count() const { return m_FrameCount - 1; }
 		int  get_width()  const { return m_Width; }
 		int  get_height() const { return m_Height; }
 
@@ -181,6 +184,12 @@ namespace me::systems {
 		std::vector<Vector3> m_AccumulationBuffer;
 		std::vector<::Color> m_PixelData;
 		Texture2D            m_OutputTexture;
+
+		// GPU counterpart of m_AccumulationBuffer: an RGBA32F image holding the
+		// running sum of the linear samples, which the compute shader tonemaps
+		// into m_OutputTexture. Allocated only when the compute program exists.
+		unsigned int m_AccumTextureId = 0;
+		void recreate_accum_texture();
 
 		// BVH — rebuilt on reset_accumulation(registry)
 		me::raytracing::BVH m_BVH;

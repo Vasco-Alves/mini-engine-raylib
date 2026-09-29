@@ -560,7 +560,7 @@ namespace editor {
 				m_Raytracer.reset_accumulation(&me::get_registry());
 			}
 
-			ImGui::Text("Frames Accumulated: %d / %d", m_Raytracer.get_accumulated_frames(), m_Raytracer.preview_samples);
+			ImGui::Text("Frames Accumulated: %d / %d", m_Raytracer.get_sample_count(), m_Raytracer.preview_samples);
 
 			ImGui::Separator();
 			ImGui::Dummy(ImVec2(0, 5));
@@ -571,7 +571,7 @@ namespace editor {
 
 			if (ImGui::SliderInt("Preview Samples", &m_Raytracer.preview_samples, 1, 500)) {
 				// If we lower the sample count below what we currently have, restart
-				if (m_Raytracer.get_accumulated_frames() > m_Raytracer.preview_samples) {
+				if (m_Raytracer.get_sample_count() > m_Raytracer.preview_samples) {
 					m_Raytracer.reset_accumulation();
 				}
 			}
@@ -1747,7 +1747,7 @@ namespace editor {
 					ImGui::Text("Raytracer: %dx%d (%s)",
 						m_Raytracer.get_width(), m_Raytracer.get_height(),
 						m_Raytracer.current_backend == me::systems::RenderBackend::GPU ? "GPU" : "CPU");
-					ImGui::Text("Samples: %d / %d", m_Raytracer.get_accumulated_frames(), m_Raytracer.preview_samples);
+					ImGui::Text("Samples: %d / %d", m_Raytracer.get_sample_count(), m_Raytracer.preview_samples);
 				}
 			}
 			ImGui::End();
