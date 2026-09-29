@@ -45,8 +45,7 @@ namespace editor {
 		// ==========================================
 		// RENDER OUTPUT TOGGLE
 		// ==========================================
-		// The caller passes the raytraced texture only when it should replace the
-		// raster view (Render mode, or Play mode with the RT toggle on).
+		// The caller passes the raytraced texture only when it should replace the raster view (Render mode, or Play mode with the RT toggle on).
 		if (raytraced_texture && raytraced_texture->id != 0) {
 			// Draw the Raytracer texture, stretched to perfectly fit the viewport bounds
 			rlImGuiImageSize(raytraced_texture, (int)m_Bounds.x, (int)m_Bounds.y);
@@ -55,8 +54,7 @@ namespace editor {
 			rlImGuiImageRenderTexture(&m_Texture);
 		}
 
-		// Mode identity: frame the viewport in the mode's color so the editor
-		// state reads at a glance (green = playing, purple = rendering).
+		// Mode identity: frame the viewport in the mode's color so the editor state reads at a glance (green = playing, purple = rendering).
 		if (is_render_mode || is_play_mode) {
 			ImU32 frame_col = is_render_mode ? IM_COL32(150, 80, 220, 255) : IM_COL32(70, 190, 95, 255);
 			ImGui::GetWindowDrawList()->AddRect(

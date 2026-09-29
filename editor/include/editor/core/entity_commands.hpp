@@ -16,6 +16,7 @@
 #include <mini-engine-raylib/ecs/component_registry.hpp>
 #include <mini-engine-raylib/ecs/components.hpp>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -284,13 +285,15 @@ namespace editor {
 	};
 
 	// =========================================================================
-	// CREATE ENTITY (empty, with Tag + Transform, optionally parented)
+	// CREATE ENTITY (empty, with Tag + Transform, optionally parented, and
+	// optionally carrying a 3D primitive so "Create Cube" is one undo step)
 	// =========================================================================
 	class CreateEntityCommand : public ICommand {
 	public:
 		CreateEntityCommand(me::Registry& reg, std::string name,
-			me::entity::entity_id parent = me::entity::null)
-			: m_Reg(&reg), m_Name(std::move(name)), m_Parent(parent) {}
+			me::entity::entity_id parent = me::entity::null,
+			std::optional<me::components::Shape3DComponent::Type> primitive = std::nullopt)
+			: m_Reg(&reg), m_Name(std::move(name)), m_Parent(parent), m_Primitive(primitive) {}
 
 		void Execute() override {
 			auto e = m_Reg->create_entity();
@@ -305,6 +308,8 @@ namespace editor {
 				}
 			}
 			e.add_component(tc);
+			if (m_Primitive)
+				e.add_component(me::components::Shape3DComponent{ *m_Primitive, me::Color::white });
 		}
 
 		void Undo() override {
@@ -326,6 +331,7 @@ namespace editor {
 		me::Registry* m_Reg;
 		std::string m_Name;
 		me::entity::entity_id m_Parent;
+		std::optional<me::components::Shape3DComponent::Type> m_Primitive;
 		me::entity::entity_id m_Created = me::entity::null;
 	};
 

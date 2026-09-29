@@ -26,9 +26,33 @@ if(MSVC)
     set_source_files_properties("src/scripting/script_manager.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj")
 endif()
 
+# The CPU path tracer uses std::execution::par_unseq. On Linux, libstdc++ runs it
+# on oneTBB whenever the TBB headers are installed, and the final link then needs
+# TBB as well. Link it when present; otherwise pin libstdc++ to its serial backend
+# so the build never depends on TBB (the CPU tracer then runs single-threaded).
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(TBB QUIET)
+    if(TBB_FOUND)
+        target_link_libraries(engine PRIVATE TBB::tbb)
+    else()
+        target_compile_definitions(engine PRIVATE _GLIBCXX_USE_TBB_PAR_BACKEND=0)
+        message(WARNING "TBB not found: the CPU path tracer will run single-threaded. "
+                        "Install TBB (e.g. libtbb-dev) for multithreaded CPU rendering.")
+    endif()
+endif()
+
+# Version header, generated from the root project(VERSION ...) so there is exactly
+# one place to bump it. Written into the build tree, never the source tree.
+configure_file(
+    "include/mini-engine-raylib/core/version.hpp.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/mini-engine-raylib/core/version.hpp"
+    @ONLY
+)
+
 # 4. Setup Include Directories
 target_include_directories(engine PUBLIC 
     "include" 
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
     "${CMAKE_SOURCE_DIR}/vendor/sol3/include"
     "${CMAKE_SOURCE_DIR}/vendor/lua/src"
     "${CMAKE_SOURCE_DIR}/vendor/JoltPhysics"

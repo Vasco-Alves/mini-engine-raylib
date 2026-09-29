@@ -71,6 +71,7 @@ namespace me::systems {
 
 			if (m_ComputeShaderProgram != 0) {
 				cache_gpu_uniform_locations();
+				recreate_accum_texture();
 				me::logger::info("Compute Shader compiled and linked successfully!");
 			} else {
 				me::logger::error("Failed to link compute shader program!");
@@ -110,10 +111,23 @@ namespace me::systems {
 		m_Loc.enable_indirect = loc("enable_indirect");
 	}
 
+	void RaytracerSystem::recreate_accum_texture() {
+		if (m_AccumTextureId != 0) {
+			rlUnloadTexture(m_AccumTextureId);
+			m_AccumTextureId = 0;
+		}
+		if (m_ComputeShaderProgram == 0) return;
+		m_AccumTextureId = rlLoadTexture(nullptr, m_Width, m_Height, RL_PIXELFORMAT_UNCOMPRESSED_R32G32B32A32, 1);
+	}
+
 	void RaytracerSystem::on_stop() {
 		if (m_OutputTexture.id != 0) {
 			UnloadTexture(m_OutputTexture);
 			m_OutputTexture.id = 0;
+		}
+		if (m_AccumTextureId != 0) {
+			rlUnloadTexture(m_AccumTextureId);
+			m_AccumTextureId = 0;
 		}
 
 		if (m_ComputeShaderProgram != 0)
@@ -163,6 +177,7 @@ namespace me::systems {
 		Image img = GenImageColor(width, height, ::BLANK);
 		m_OutputTexture = LoadTextureFromImage(img);
 		UnloadImage(img);
+		recreate_accum_texture();
 
 		m_FrameCount = 1;
 	}
@@ -179,10 +194,7 @@ namespace me::systems {
 		}
 	}
 
-	void RaytracerSystem::render_realtime_frame(me::Registry& registry,
-		const me::components::CameraComponent& camera,
-		const me::components::TransformComponent& cam_transform) {
-
+	void RaytracerSystem::render_realtime_frame(me::Registry& registry, const me::components::CameraComponent& camera, const me::components::TransformComponent& cam_transform) {
 		// Borrow the progressive-accumulation machinery for an in-frame burst:
 		// N samples accumulate, the frame is done, and the next frame starts
 		// fresh because the scene has moved.
@@ -190,9 +202,7 @@ namespace me::systems {
 		const int  saved_target = preview_samples;
 		const int  samples = std::max(1, play_samples_per_frame);
 		accumulate = true;
-		// on_update early-outs once m_FrameCount reaches the target, and the
-		// counter sits at k+1 after k samples — +1 so all N samples render.
-		preview_samples = samples + 1;
+		preview_samples = samples;
 
 		// With a locked pattern the per-pixel seed salt restarts identically
 		// every frame (it still varies across the N samples *within* a frame),
@@ -275,6 +285,20 @@ namespace me::systems {
 		// any future code path inside trace_ray.
 		m_ActiveRegistry = &registry;
 
+		// Restart the accumulation when the camera moves: samples taken from another
+		// viewpoint would smear into the image. The BVH is left untouched.
+		const Vector3 eye = cam_transform.world_position();
+		const Vector3 target = { camera.target.x, camera.target.y, camera.target.z };
+		const Vector3 up = { camera.up.x, camera.up.y, camera.up.z };
+		if (camera.fov != m_LastFov || !Vector3Equals(eye, m_LastEye) ||
+			!Vector3Equals(target, m_LastTarget) || !Vector3Equals(up, m_LastUp)) {
+			m_LastEye = eye;
+			m_LastTarget = target;
+			m_LastUp = up;
+			m_LastFov = camera.fov;
+			reset_accumulation();
+		}
+
 		if (!accumulate) {
 			// Real-time noisy mode: reset pixel history every frame.
 			// Reuse the existing BVH — no need to rebuild.
@@ -283,7 +307,7 @@ namespace me::systems {
 			reset_accumulation();
 		}
 
-		if (accumulate && m_FrameCount >= preview_samples) {
+		if (accumulate && get_sample_count() >= preview_samples) {
 			m_ActiveRegistry = nullptr;
 			return; // We've reached target quality — let the CPU rest.
 		}
@@ -304,8 +328,7 @@ namespace me::systems {
 					// Generate the QMC anti-aliased camera ray.
 					// m_FrameCount drives the Halton sequence (starts at 1, never 0,
 					// which avoids the degenerate (0,0) sample at the pixel center).
-					me::raytracing::Ray ray = generate_camera_ray(
-						x, y, m_Width, m_Height, camera, cam_transform, m_FrameCount, seed);
+					me::raytracing::Ray ray = generate_camera_ray(x, y, m_Width, m_Height, camera, cam_transform, m_FrameCount, seed);
 
 					// Trace and accumulate.
 					Vector3 light = trace_ray(ray, 0, seed);
@@ -345,10 +368,11 @@ namespace me::systems {
 					avg.y = std::sqrt(std::max(0.0f, avg.y));
 					avg.z = std::sqrt(std::max(0.0f, avg.z));
 
+					// Round to nearest, as the GPU's store to its rgba8 image does.
 					m_PixelData[index] = ::Color{
-						static_cast<unsigned char>(std::clamp(avg.x, 0.0f, 1.0f) * 255.0f),
-						static_cast<unsigned char>(std::clamp(avg.y, 0.0f, 1.0f) * 255.0f),
-						static_cast<unsigned char>(std::clamp(avg.z, 0.0f, 1.0f) * 255.0f),
+						static_cast<unsigned char>(std::clamp(avg.x, 0.0f, 1.0f) * 255.0f + 0.5f),
+						static_cast<unsigned char>(std::clamp(avg.y, 0.0f, 1.0f) * 255.0f + 0.5f),
+						static_cast<unsigned char>(std::clamp(avg.z, 0.0f, 1.0f) * 255.0f + 0.5f),
 						255
 					};
 				}
@@ -390,8 +414,7 @@ namespace me::systems {
 		// World-space eye (a child camera's `position` is parent-relative).
 		Vector3 eye = cam_transform.world_position();
 
-		Vector3 fwd = Vector3Normalize(Vector3Subtract(
-			{ camera.target.x, camera.target.y, camera.target.z }, eye));
+		Vector3 fwd = Vector3Normalize(Vector3Subtract({ camera.target.x, camera.target.y, camera.target.z }, eye));
 		Vector3 up = Vector3Normalize({ camera.up.x, camera.up.y, camera.up.z });
 		Vector3 right = Vector3Normalize(Vector3CrossProduct(fwd, up));
 		Vector3 true_up = Vector3CrossProduct(right, fwd);
@@ -400,7 +423,7 @@ namespace me::systems {
 			fwd.x + right.x * vx + true_up.x * vy,
 			fwd.y + right.y * vx + true_up.y * vy,
 			fwd.z + right.z * vx + true_up.z * vy
-		});
+			});
 
 		// Pinhole camera unless an aperture is set.
 		if (aperture <= 0.0f)
@@ -414,9 +437,7 @@ namespace me::systems {
 		Vector3 focal_point = Vector3Add(eye, Vector3Scale(dir, focus_distance));
 		float lens_r = aperture * std::sqrt(me::raytracing::random_float(seed));
 		float lens_a = 2.0f * PI * me::raytracing::random_float(seed);
-		Vector3 lens_offset = Vector3Add(
-			Vector3Scale(right, std::cos(lens_a) * lens_r),
-			Vector3Scale(true_up, std::sin(lens_a) * lens_r));
+		Vector3 lens_offset = Vector3Add(Vector3Scale(right, std::cos(lens_a) * lens_r), Vector3Scale(true_up, std::sin(lens_a) * lens_r));
 		Vector3 new_origin = Vector3Add(eye, lens_offset);
 		return { new_origin, Vector3Normalize(Vector3Subtract(focal_point, new_origin)) };
 	}
@@ -772,7 +793,10 @@ namespace me::systems {
 			// though the single bounce ray went one way.
 			float sw = enable_reflections ? (1.0f - p.roughness) : 0.0f;
 			float dw = enable_indirect ? p.roughness : 0.0f;
-			float bw = sw + dw * 0.5f;
+			// Cosine-weighted diffuse sampling cancels the BRDF's 1/pi and the
+			// cosine term, so a matte bounce carries the full albedo — the same
+			// fraction the direct term uses. Anything less darkens indirect light.
+			float bw = sw + dw;
 
 			// FIX: Only smooth plastics reflect pure white. Everything else uses base_color!
 			float white_blend = (1.0f - p.metallic) * (1.0f - p.roughness);
@@ -811,7 +835,7 @@ namespace me::systems {
 		auto fold = [&h](const void* data, size_t bytes) {
 			const unsigned char* p = static_cast<const unsigned char*>(data);
 			for (size_t i = 0; i < bytes; ++i) { h ^= p[i]; h *= 1099511628211ull; }
-		};
+			};
 		// view<T>() iterates the T pool in its native (entity_map) order, so folding
 		// each entity id + component struct is equivalent to the old whole-array
 		// hash: still sensitive to any field change, the entity set, and reordering.
@@ -823,7 +847,7 @@ namespace me::systems {
 				++n;
 			}
 			fold(&n, sizeof(n));
-		};
+			};
 		using namespace me::components;
 		hash_pool(registry.view<TransformComponent>());
 		hash_pool(registry.view<Shape3DComponent>());
@@ -1051,7 +1075,7 @@ namespace me::systems {
 		auto up = [](unsigned int& ssbo, unsigned int& cap, const auto& vec, const void* dummy, unsigned int dummy_size) {
 			if (vec.empty()) upload_ssbo(ssbo, cap, dummy, dummy_size);
 			else upload_ssbo(ssbo, cap, vec.data(), static_cast<unsigned int>(vec.size() * sizeof(vec[0])));
-		};
+			};
 
 		up(m_ssboNodes, m_capNodes, m_GPUNodes, &dn, sizeof(dn));
 		up(m_ssboTriangles, m_capTriangles, m_GPUTriangles, &dt, sizeof(dt));
@@ -1126,6 +1150,8 @@ namespace me::systems {
 		// 3. Bind the Output Texture
 		// We tell OpenGL: "Take m_OutputTexture, and let the Compute Shader write directly into its memory!"
 		rlBindImageTexture(m_OutputTexture.id, 0, m_OutputTexture.format, false);
+		// ...and the float running sum it tonemaps from.
+		rlBindImageTexture(m_AccumTextureId, 1, RL_PIXELFORMAT_UNCOMPRESSED_R32G32B32A32, false);
 
 		// 4. DISPATCH — in horizontal row bands, never one giant dispatch.
 		// A single full-image dispatch at export resolutions (with high bounce

@@ -92,7 +92,7 @@ namespace editor {
 		// Sanitize the settings (shared with the PNG export).
 		if (m_Raytracer.export_width < 1)  m_Raytracer.export_width = 1;
 		if (m_Raytracer.export_height < 1) m_Raytracer.export_height = 1;
-		if (m_Raytracer.export_samples < 2) m_Raytracer.export_samples = 2;
+		if (m_Raytracer.export_samples < 1) m_Raytracer.export_samples = 1;
 		if (m_Raytracer.export_bounces < 1)  m_Raytracer.export_bounces = 1;
 		if (m_Raytracer.export_bounces > 16) m_Raytracer.export_bounces = 16;
 		if (m_AnimFps < 1)   m_AnimFps = 1;
@@ -163,7 +163,7 @@ namespace editor {
 			{
 				double mpx = (double)m_Raytracer.export_width * (double)m_Raytracer.export_height / 1e6;
 				double work = mpx * (double)std::max(1, m_Raytracer.export_bounces);
-				int vram_mb = (int)(mpx * 8.0) + 1; // output image + readback staging
+				int vram_mb = (int)(mpx * 24.0) + 1; // output image + float accumulation + readback staging
 
 				ImGui::Dummy(ImVec2(0, 6));
 				ImGui::Separator();
@@ -210,7 +210,7 @@ namespace editor {
 				// 2. Sanitize the export settings (InputInt allows anything).
 				if (m_Raytracer.export_width < 1)  m_Raytracer.export_width = 1;
 				if (m_Raytracer.export_height < 1) m_Raytracer.export_height = 1;
-				if (m_Raytracer.export_samples < 2) m_Raytracer.export_samples = 2;
+				if (m_Raytracer.export_samples < 1) m_Raytracer.export_samples = 1;
 				if (m_Raytracer.export_bounces < 1)  m_Raytracer.export_bounces = 1;
 				if (m_Raytracer.export_bounces > 16) m_Raytracer.export_bounces = 16;
 
@@ -302,7 +302,7 @@ namespace editor {
 
 			// Progress reads the raytracer's own accumulation counter, so the
 			// bar can never drift from what was actually rendered.
-			int done = m_Raytracer.get_accumulated_frames();
+			int done = m_Raytracer.get_sample_count();
 			float progress = (float)done / (float)m_Raytracer.export_samples;
 			if (progress > 1.0f) progress = 1.0f;
 			ImGui::ProgressBar(progress, ImVec2(300, 20));
@@ -314,11 +314,11 @@ namespace editor {
 			long long px = (long long)m_Raytracer.export_width * (long long)m_Raytracer.export_height;
 			int samples_per_frame = (int)std::clamp(4'000'000LL / std::max(1LL, px), 1LL, 10LL);
 			for (int i = 0; i < samples_per_frame
-				&& m_Raytracer.get_accumulated_frames() < m_Raytracer.export_samples; ++i) {
+				&& m_Raytracer.get_sample_count() < m_Raytracer.export_samples; ++i) {
 				m_Raytracer.on_update(me::get_registry(), m_EditorCamera, m_EditorCameraTransform);
 			}
 
-			if (m_Raytracer.get_accumulated_frames() >= m_Raytracer.export_samples) {
+			if (m_Raytracer.get_sample_count() >= m_Raytracer.export_samples) {
 				m_Raytracer.export_to_png(m_ExportPath);
 				finish_export();
 				ImGui::CloseCurrentPopup();
@@ -357,7 +357,7 @@ namespace editor {
 			ImGui::Text("Frame %d / %d (t = %.2fs)", m_AnimRenderFrame + 1, m_AnimTotalFrames,
 				std::min((float)m_AnimRenderFrame / fps, m_Animation.duration()));
 
-			int done_samples = m_Raytracer.get_accumulated_frames();
+			int done_samples = m_Raytracer.get_sample_count();
 			float sample_prog = (float)done_samples / (float)m_Raytracer.export_samples;
 			if (sample_prog > 1.0f) sample_prog = 1.0f;
 			ImGui::ProgressBar(sample_prog, ImVec2(320, 14));
@@ -367,12 +367,12 @@ namespace editor {
 			long long px = (long long)m_Raytracer.export_width * (long long)m_Raytracer.export_height;
 			int spf = (int)std::clamp(4'000'000LL / std::max(1LL, px), 1LL, 10LL);
 			for (int i = 0; i < spf
-				&& m_Raytracer.get_accumulated_frames() < m_Raytracer.export_samples; ++i) {
+				&& m_Raytracer.get_sample_count() < m_Raytracer.export_samples; ++i) {
 				m_Raytracer.on_update(me::get_registry(), m_EditorCamera, m_EditorCameraTransform);
 			}
 
 			// Frame converged -> save it, move the playhead to the next frame.
-			if (m_Raytracer.get_accumulated_frames() >= m_Raytracer.export_samples) {
+			if (m_Raytracer.get_sample_count() >= m_Raytracer.export_samples) {
 				char frame_name[64];
 				snprintf(frame_name, sizeof(frame_name), "frame_%04d.png", m_AnimRenderFrame + 1);
 				m_Raytracer.export_to_png((std::filesystem::path(m_AnimOutDir) / frame_name).string());

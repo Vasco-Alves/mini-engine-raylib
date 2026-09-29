@@ -51,12 +51,20 @@ namespace editor {
 
 		// Right-Click Empty Space -> Create Entity
 		if (ImGui::BeginPopupContextWindow("HierarchyContext", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems)) {
-			if (ImGui::MenuItem("Create Empty Entity")) {
-				auto cmd = std::make_unique<editor::CreateEntityCommand>(*m_Context, "New Entity");
+			auto create = [&](const char* name, std::optional<me::components::Shape3DComponent::Type> primitive) {
+				auto cmd = std::make_unique<editor::CreateEntityCommand>(*m_Context, name, me::entity::null, primitive);
 				auto* raw = cmd.get();
 				command_history.AddCommand(std::move(cmd));
 				m_SelectionContext = raw->created_id(); // Auto-select new entity
-			}
+			};
+			if (ImGui::MenuItem("Create Empty Entity")) create("New Entity", std::nullopt);
+
+			// Common primitives one click away, instead of empty entity +
+			// Add Component + picking the shape type.
+			ImGui::SeparatorText("3D Primitive");
+			if (ImGui::MenuItem("Cube"))   create("Cube", me::components::Shape3DComponent::Cube);
+			if (ImGui::MenuItem("Sphere")) create("Sphere", me::components::Shape3DComponent::Sphere);
+			if (ImGui::MenuItem("Plane"))  create("Plane", me::components::Shape3DComponent::Plane);
 			ImGui::EndPopup();
 		}
 

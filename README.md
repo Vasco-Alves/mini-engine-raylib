@@ -2,7 +2,7 @@
 
 **A small scene engine built on [raylib](https://www.raylib.com/). Build a scene once — press Play to run it as a game, or press Render to path-trace it into stills and animations.**
 
-> Version 1.1.0 · C++23 · MIT · Windows (primary), Linux (builds, lightly tested), macOS (experimental: CPU path tracing only — Apple's OpenGL has no compute shaders)
+> Version 1.1.1 · C++23 · MIT · Windows (primary), Linux (builds, lightly tested), macOS (experimental: CPU path tracing only — Apple's OpenGL has no compute shaders)
 
 ![Editor](docs/images/editor_hero.png)
 
@@ -61,7 +61,9 @@ editor/     Executable `editor` — the ImGui tool built on top of `engine`
 game/       Executable `game` — the shipped game runtime (no editor, no ImGui);
             "File > Export Game..." packages it with a project into a standalone game
 docs/       Documentation (see ARCHITECTURE.md)
-tests/      Headless tests (scene round-trip) + dev tools (shader compile check)
+tests/      Headless tests (serialization, animation, Lua API, physics events)
+            + dev tools (shader compile check, BVH benchmark)
+tools/      Asset scripts (the synthesized demo jump sound)
 vendor/     Third-party dependencies (raylib, imgui, lua, sol3, jolt, json, mini-ecs, …)
 ```
 
@@ -74,6 +76,14 @@ The editor and the game runtime are two front-ends over the same engine API.
 
 Requires a C++23 compiler, CMake ≥ 3.5 (3.21+ recommended), and a GPU/driver with **OpenGL 4.3** (raylib requests a 4.3 context at startup; the GPU path-tracer backend uses compute shaders). The build statically links the MSVC runtime and pulls every dependency from `vendor/` via `add_subdirectory`, so make sure the submodules are present.
 
+On Linux, raylib also needs the X11 and OpenGL development packages, and the CPU path tracer only runs multithreaded when TBB is installed (without it the build still succeeds and that backend runs on one thread). On Debian/Ubuntu:
+
+```bash
+sudo apt install build-essential cmake ninja-build git \
+    libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl1-mesa-dev \
+    libtbb-dev
+```
+
 ```bash
 git clone --recursive https://github.com/Vasco-Alves/mini-engine-raylib.git
 cd mini-engine-raylib
@@ -83,7 +93,7 @@ cd mini-engine-raylib
 ### With CMake presets (recommended)
 
 ```bash
-cmake --preset x64-debug        # or: x64-release, linux-debug
+cmake --preset x64-debug        # or: x64-release, linux-debug, linux-release
 cmake --build --preset x64-debug
 ```
 
@@ -93,12 +103,13 @@ Presets use the Ninja generator. The editor builds as **`MiniEngine`** (plus the
 
 ### Tests
 
-A headless serialization round-trip test builds as the `scene_roundtrip_test` target (and is registered with CTest):
+Four headless tests — scene serialization round-trip, animation evaluation, the gameplay Lua API and physics events — are registered with CTest. After building a preset, run them with the matching test preset:
 
 ```bash
-cmake --build build --target scene_roundtrip_test
-ctest --test-dir build -C Debug          # or just run the scene_roundtrip_test executable
+ctest --preset x64-debug
 ```
+
+Three dev tools build alongside them but stay out of CTest: `shader_check` compiles the raytracer compute shader (it opens a brief GL window), `bvh_bench` times the path tracer's BVH against an exhaustive search over the same primitives, and `render_bench` renders a scene file headlessly through the path tracer, as *Export to PNG* does, and reports the time per sample on either backend (`render_bench scene.json out.png --samples 256 --backend cpu`; run it without arguments for the options). Run the benchmarks from a Release build: `out/build/x64-release/bin/`.
 
 ## Running
 
@@ -208,3 +219,5 @@ This produces `mini-engine-raylib-<version>-win64.zip` containing the editor, th
 ## License
 
 The engine is released under the [MIT License](LICENSE). Vendored dependencies retain their own licenses (see each folder under `vendor/`).
+
+The demo dragon (`editor/assets/demo/models/dragon.obj`, copied into every new project) is a reduced, 100,000-triangle version of the Stanford Dragon from the [Stanford 3D Scanning Repository](https://graphics.stanford.edu/data/3Dscanrep/), courtesy of the Stanford University Computer Graphics Laboratory. It is **not** covered by the MIT License: the repository allows research use and free redistribution, and asks that published images made with it credit the Stanford Computer Graphics Laboratory, but it may not be used commercially or appear in a product for sale without Stanford's permission. Replace it before shipping a commercial game.

@@ -1,6 +1,8 @@
 #version 430 core
 
 layout(rgba8, binding = 0) uniform image2D img_output;
+// Running sum of the linear (pre-tonemap) samples, in full float precision.
+layout(rgba32f, binding = 1) uniform image2D img_accum;
 
 // ============================================================================
 // MEMORY STRUCTURES (must match gpu_types.hpp exactly)
@@ -172,7 +174,9 @@ float intersect_aabb(vec3 origin, vec3 inv_dir, vec3 bmin, vec3 bmax, float max_
 // ============================================================================
 bool intersect_sphere(Ray ray, mat4 inv_model, mat4 normal_mat, out float world_t, out vec3 world_n) {
     vec3 lo = rl_transform_point(inv_model, ray.origin);
-    vec3 ld = normalize(rl_transform_dir(inv_model, ray.direction));
+    vec3 ld = rl_transform_dir(inv_model, ray.direction);
+    float scale = length(ld); // a world distance d spans d*scale in local space
+    ld /= scale;
     float b = 2.0 * dot(lo, ld), c = dot(lo, lo) - 1.0;
     float disc = b*b - 4.0*c;
     if (disc < 0.0) return false;
@@ -180,25 +184,29 @@ bool intersect_sphere(Ray ray, mat4 inv_model, mat4 normal_mat, out float world_
     if (t < 0.001) t = (-b + sq) * 0.5;
     if (t < 0.001) return false;
     vec3 local_hit = lo + ld * t;
-    world_t = length(rl_transform_point(inverse(inv_model), local_hit) - ray.origin);
+    world_t = t / scale;
     world_n = normalize(rl_transform_dir(normal_mat, local_hit));
     return true;
 }
 
 bool intersect_plane(Ray ray, mat4 inv_model, mat4 normal_mat, out float world_t, out vec3 world_n) {
     vec3 lo = rl_transform_point(inv_model, ray.origin);
-    vec3 ld = normalize(rl_transform_dir(inv_model, ray.direction));
+    vec3 ld = rl_transform_dir(inv_model, ray.direction);
+    float scale = length(ld); // a world distance d spans d*scale in local space
+    ld /= scale;
     if (abs(ld.y) < 1e-8) return false;
     float t = -lo.y / ld.y;
     if (t < 0.001) return false;
-    world_t = length(rl_transform_point(inverse(inv_model), lo + ld * t) - ray.origin);
+    world_t = t / scale;
     world_n = normalize(rl_transform_dir(normal_mat, vec3(0.0, 1.0, 0.0)));
     return true;
 }
 
 bool intersect_cube(Ray ray, mat4 inv_model, mat4 normal_mat, out float world_t, out vec3 world_n) {
     vec3 lo = rl_transform_point(inv_model, ray.origin);
-    vec3 ld = normalize(rl_transform_dir(inv_model, ray.direction));
+    vec3 ld = rl_transform_dir(inv_model, ray.direction);
+    float scale = length(ld); // a world distance d spans d*scale in local space
+    ld /= scale;
     float t_enter = -1e38, t_exit = 1e38;
     int hit_axis = -1; float hit_sign = 1.0;
     int exit_axis = -1; float exit_sign = 1.0;
@@ -219,7 +227,7 @@ bool intersect_cube(Ray ray, mat4 inv_model, mat4 normal_mat, out float world_t,
     float t_local = t_enter; int face_axis = hit_axis; float face_sign = hit_sign;
     if (t_enter < 0.001) { t_local = t_exit; face_axis = exit_axis; face_sign = exit_sign; }
     if (t_local < 0.001 || face_axis < 0) return false;
-    world_t = length(rl_transform_point(inverse(inv_model), lo + ld*t_local) - ray.origin);
+    world_t = t_local / scale;
     vec3 local_n = vec3(0.0);
     if(face_axis==0)local_n.x=face_sign; else if(face_axis==1)local_n.y=face_sign; else local_n.z=face_sign;
     world_n = normalize(rl_transform_dir(normal_mat, local_n));
@@ -239,8 +247,8 @@ bool intersect_triangle_mt(vec3 ro, vec3 rd, vec3 v0, vec3 v1, vec3 v2, out floa
 // ============================================================================
 // BLAS TRAVERSAL
 // ============================================================================
-bool traverse_blas(vec3 ro, vec3 rd, int blas_root, out float best_t, out vec3 best_n) {
-    vec3 inv_dir = safe_inv_dir(rd); best_t = 1e38; bool hit = false;
+bool traverse_blas(vec3 ro, vec3 rd, int blas_root, float max_t, out float best_t, out vec3 best_n) {
+    vec3 inv_dir = safe_inv_dir(rd); best_t = max_t; bool hit = false;
     int stack[64]; int top=0; stack[top++]=blas_root;
     while (top > 0) {
         GPUNode node = bvh_nodes[stack[--top]];
@@ -253,7 +261,18 @@ bool traverse_blas(vec3 ro, vec3 rd, int blas_root, out float best_t, out vec3 b
                     best_n=normalize(cross(triangles[i].v1-triangles[i].v0, triangles[i].v2-triangles[i].v0));
                 }
             }
-        } else { stack[top++]=int(node.left_child); stack[top++]=int(node.left_child)+1; }
+        } else {
+            // Push the farther child first so the nearer one is examined next, as on
+            // the CPU: a close hit found early lets best_t prune the rest of the tree.
+            int l = int(node.left_child), r = l + 1;
+            float tl = intersect_aabb(ro, inv_dir, bvh_nodes[l].bounds_min, bvh_nodes[l].bounds_max, best_t);
+            float tr = intersect_aabb(ro, inv_dir, bvh_nodes[r].bounds_min, bvh_nodes[r].bounds_max, best_t);
+            if (tl < 1e37 && tr < 1e37) {
+                if (tl <= tr) { stack[top++] = r; stack[top++] = l; }
+                else          { stack[top++] = l; stack[top++] = r; }
+            } else if (tl < 1e37) stack[top++] = l;
+            else if (tr < 1e37) stack[top++] = r;
+        }
     }
     return hit;
 }
@@ -261,14 +280,15 @@ bool traverse_blas(vec3 ro, vec3 rd, int blas_root, out float best_t, out vec3 b
 // ============================================================================
 // SCENE TRAVERSAL — full hit info
 // ============================================================================
-bool traverse_scene(Ray ray, out HitInfo hit) {
+bool traverse_scene(Ray ray, float max_t, out HitInfo hit) {
+    vec3 ro = ray.origin;
     vec3 inv_dir = safe_inv_dir(ray.direction);
-    float best_t = 1e38; bool found = false;
+    float best_t = max_t; bool found = false;
     int stack[64]; int top=0; stack[top++]=0;
 
     while (top > 0) {
         GPUNode node = bvh_nodes[stack[--top]];
-        if (intersect_aabb(ray.origin, inv_dir, node.bounds_min, node.bounds_max, best_t) >= 1e37) continue;
+        if (intersect_aabb(ro, inv_dir, node.bounds_min, node.bounds_max, best_t) >= 1e37) continue;
 
         if (node.count > 0u) {
             for (uint pi=node.left_child; pi<node.left_child+node.count; pi++) {
@@ -284,12 +304,16 @@ bool traverse_scene(Ray ray, out HitInfo hit) {
                     prim_hit = intersect_cube(ray, prim.inverse_model, prim.normal_matrix, t, n);
                 } else if (prim.type == 3 && prim.blas_root_index >= 0) {
                     vec3 lo = rl_transform_point(prim.inverse_model, ray.origin);
-                    vec3 ld = normalize(rl_transform_dir(prim.inverse_model, ray.direction));
+                    vec3 ld = rl_transform_dir(prim.inverse_model, ray.direction);
+                    // A world distance d spans d*|ld| in model space, so the hit
+                    // converts back without the model matrix (no inverse per hit)
+                    // and the best distance so far bounds the model's traversal.
+                    float scale = length(ld);
+                    ld /= scale;
                     float local_t; vec3 local_n;
-                    if (traverse_blas(lo, ld, prim.blas_root_index, local_t, local_n)) {
-                        vec3 world_hit = rl_transform_point(inverse(prim.inverse_model), lo + ld*local_t);
-                        t = length(world_hit - ray.origin);
-                        if (t < best_t) { n = normalize(rl_transform_dir(prim.normal_matrix, local_n)); prim_hit = true; }
+                    if (traverse_blas(lo, ld, prim.blas_root_index, best_t * scale, local_t, local_n)) {
+                        t = local_t / scale;
+                        n = normalize(rl_transform_dir(prim.normal_matrix, local_n)); prim_hit = true;
                     }
                 }
 
@@ -300,7 +324,18 @@ bool traverse_scene(Ray ray, out HitInfo hit) {
                     hit.normal = hit.front_face ? n : -n;
                 }
             }
-        } else { stack[top++]=int(node.left_child); stack[top++]=int(node.left_child)+1; }
+        } else {
+            // Push the farther child first so the nearer one is examined next, as on
+            // the CPU: a close hit found early lets best_t prune the rest of the tree.
+            int l = int(node.left_child), r = l + 1;
+            float tl = intersect_aabb(ro, inv_dir, bvh_nodes[l].bounds_min, bvh_nodes[l].bounds_max, best_t);
+            float tr = intersect_aabb(ro, inv_dir, bvh_nodes[r].bounds_min, bvh_nodes[r].bounds_max, best_t);
+            if (tl < 1e37 && tr < 1e37) {
+                if (tl <= tr) { stack[top++] = r; stack[top++] = l; }
+                else          { stack[top++] = l; stack[top++] = r; }
+            } else if (tl < 1e37) stack[top++] = l;
+            else if (tr < 1e37) stack[top++] = r;
+        }
     }
     return found;
 }
@@ -321,7 +356,7 @@ vec3 shadow_transmittance(vec3 origin, vec3 dir, float max_t) {
     for (int k = 0; k < 8; k++) {
         Ray r; r.origin = o; r.direction = dir;
         HitInfo h;
-        if (!traverse_scene(r, h)) break;   // nothing else in the way
+        if (!traverse_scene(r, remaining, h)) break;   // nothing else before the light
         if (h.t >= remaining) break;        // next surface is beyond the light
 
         GPUMaterial om = materials[h.mat_index];
@@ -464,7 +499,7 @@ void main() {
 
     for (int bounce = 0; bounce <= max_bounces; bounce++) {
         HitInfo hit;
-        if (!traverse_scene(ray, hit)) {
+        if (!traverse_scene(ray, 1e38, hit)) {
             final_color += throughput * sample_sky(ray.direction);
             break;
         }
@@ -552,7 +587,8 @@ void main() {
 
             float white_blend = (1.0 - mat.metallic) * (1.0 - mat.roughness);
             vec3  bounce_tint = mix(mat.base_color, vec3(1.0), white_blend);
-            float bw          = spec_w + diff_w * 0.5;
+            // A cosine-weighted diffuse bounce carries the full albedo (see the CPU path).
+            float bw          = spec_w + diff_w;
 
             ray.origin    = shadow_origin;
             ray.direction = new_dir;
@@ -570,17 +606,17 @@ void main() {
         if (lum > firefly_clamp) final_color *= firefly_clamp / lum;
     }
 
-    // ACES Filmic + gamma (matches CPU)
-    final_color *= exposure;
-    final_color  = (final_color*(2.51*final_color+0.03)) / (final_color*(2.43*final_color+0.59)+0.14);
-    final_color  = sqrt(clamp(final_color, 0.0, 1.0));
+    // GPU accumulation — like the CPU path, sum the LINEAR samples in float and
+    // tonemap the average. Averaging after the tonemap would bias noisy pixels
+    // (the curve is non-linear), and an 8-bit running average stops converging
+    // after a few hundred samples, when each new sample moves it by less than
+    // half a step.
+    vec3 sum = final_color;
+    if (frame_count > 1u) sum += imageLoad(img_accum, pixel_coords).rgb;
+    imageStore(img_accum, pixel_coords, vec4(sum, 1.0));
 
-    // GPU accumulation — running average across frames
-    vec4 new_sample = vec4(final_color, 1.0);
-    if (frame_count <= 1u) {
-        imageStore(img_output, pixel_coords, new_sample);
-    } else {
-        vec4 prev = imageLoad(img_output, pixel_coords);
-        imageStore(img_output, pixel_coords, mix(prev, new_sample, 1.0/float(frame_count)));
-    }
+    // ACES Filmic + gamma (matches CPU)
+    vec3 c = sum / float(frame_count) * exposure;
+    c = (c*(2.51*c+0.03)) / (c*(2.43*c+0.59)+0.14);
+    imageStore(img_output, pixel_coords, vec4(sqrt(clamp(c, 0.0, 1.0)), 1.0));
 }

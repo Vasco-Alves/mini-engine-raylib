@@ -32,3 +32,17 @@ add_test(NAME physics_events COMMAND physics_events_test)
 # brief GL window (compute needs a 4.3 context), so it's not registered with CTest.
 add_executable(shader_check shader_check.cpp)
 target_link_libraries(shader_check PRIVATE raylib)
+
+# Dev tool: benchmarks the path tracer's BVH against an exhaustive search over the
+# same primitives (build time, time per ray, tree depth). It reports timings rather
+# than assertions, so it's not registered with CTest either — run the Release build.
+add_executable(bvh_bench bvh_bench.cpp)
+target_compile_definitions(bvh_bench PRIVATE ME_DEMO_MODEL="${CMAKE_SOURCE_DIR}/editor/assets/demo/models/dragon.obj")
+target_link_libraries(bvh_bench PRIVATE engine raylib Jolt)
+
+# Dev tool: renders a scene file headlessly through the path tracer, as Export to PNG
+# does, and reports the time per sample (figures; CPU vs GPU timing). The GPU backend
+# needs a GL 4.3 context, so it opens a hidden window and stays out of CTest.
+add_executable(render_bench render_bench.cpp)
+target_compile_definitions(render_bench PRIVATE ME_ENGINE_ASSETS="${CMAKE_SOURCE_DIR}/engine/assets")
+target_link_libraries(render_bench PRIVATE engine raylib Jolt)

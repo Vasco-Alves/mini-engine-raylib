@@ -379,8 +379,6 @@ namespace me::render {
 		// ==========================================
 		// 3. RENDER SCENE
 		// ==========================================
-		// (No grid here: the editor draws its own in edit mode, and exported
-		// games should never show editor furniture.)
 		BeginMode3D(rayCam);
 
 		if (s_LightingEnabled) BeginShaderMode(s_LightingShader);
