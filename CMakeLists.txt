@@ -124,6 +124,11 @@ else()
 endif()
 set(CPACK_PACKAGE_FILE_NAME "mini-engine-raylib-${PROJECT_VERSION}-${ME_PLATFORM_TAG}")
 set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
+# ELF binaries carry their symbol table inline, so an unstripped Linux archive is
+# several times the size of the Windows one (whose symbols live in separate .pdb
+# files that are never installed). Strip on package, not on build, so a local
+# Release build stays debuggable.
+set(CPACK_STRIP_FILES TRUE)
 set(CPACK_COMPONENTS_ALL runtime)
 set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
 # Single-component archive: name it like the package, not "<package>-runtime".
